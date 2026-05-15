@@ -9,11 +9,27 @@
 # Description：
 """
 import os
+import numpy as np
 from typing import List, Dict, Any, Optional
+from PIL import Image, ImageDraw, ImageFont
 
 from src.utils import ver_onnx
 from src.utils import yolo_onnx
 from src.utils import matchingMode
+
+
+def _render_char(char: str, size: int = 48) -> np.ndarray:
+    """将单个字符渲染为白底黑字图片，返回 BGR numpy 数组"""
+    img = Image.new('RGB', (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", size - 8)
+    except OSError:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), char, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((size - tw) / 2, (size - th) / 2 - bbox[1]), char, fill=(0, 0, 0), font=font)
+    return np.array(img)[:, :, ::-1]  # RGB -> BGR
 
 
 class TextSelectCaptcha(object):
@@ -33,19 +49,34 @@ class TextSelectCaptcha(object):
     def run(self, image_path: str, click_text: Optional[str] = None) -> List[List[float]]:
         img = matchingMode.open_image(image_path)
         data = self.yolo.inference(img)
-        target_boxes = [item[:4] for item in data if len(item) >= 6 and item[5] == 0]
-        char_boxes = [item[:4] for item in data if len(item) >= 6 and item[5] == 2]
+        print(data)
+        target_boxes = [item[:4] for item in data if len(item) >= 6 and item[5] == 2]
+        char_boxes = [item[:4] for item in data if len(item) >= 6 and item[5] == 0]
         char_boxes.sort(key=lambda box: box[0])
-        if not target_boxes or not char_boxes:
+        print(f"检测到 {len(target_boxes)} 个目标，{len(char_boxes)} 个字符")
+        if not char_boxes:
             return []
-        img_targets = [img[int(box[1]):int(box[3]), int(box[0]):int(box[2])] for box in target_boxes]
         chars = [img[int(box[1]):int(box[3]), int(box[0]):int(box[2])] for box in char_boxes]
-        slys = self.pre.reason_all_batch(chars, img_targets)
+        if target_boxes:
+            img_targets = [img[int(box[1]):int(box[3]), int(box[0]):int(box[2])] for box in target_boxes]
+            slys = self.pre.reason_all_batch(chars, img_targets)
+        elif click_text:
+            chars_to_click = [c for c in click_text.replace(' ', '') if c.strip()]
+            img_targets = [_render_char(c) for c in chars_to_click]
+            slys = self.pre.reason_all_batch(chars, img_targets)
+            print("渲染匹配分数:")
+            for i, c in enumerate(chars_to_click):
+                col_scores = [slys[j][i] for j in range(len(slys))]
+                scores = sorted(enumerate(col_scores), key=lambda x: -x[1])
+                print(f"  '{c}' -> 最佳: char{scores[0][0]}({scores[0][1]:.3f}), 次佳: char{scores[1][0]}({scores[1][1]:.3f})" if len(scores) >= 2 else f"  '{c}' -> char{scores[0][0]}({scores[0][1]:.3f})")
+        else:
+            return char_boxes
         sorted_result = matchingMode.find_overall_index_fast(slys)
         # 按 target 顺序排列（target_index 越小 → 越先点击）
         sorted_result.sort(key=lambda x: x[1])
         if click_text:
             chars_to_click = [c for c in click_text.replace(' ', '') if c.strip()]
+            print(chars_to_click)
             sorted_result = sorted_result[:len(chars_to_click)]
         result = [char_boxes[i] for i, _ in sorted_result]
         return result
