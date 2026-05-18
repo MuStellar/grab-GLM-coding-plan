@@ -4,6 +4,12 @@
 
 [拼好模打9.5折](https://www.bigmodel.cn/glm-coding?ic=CCQHLMSXTP)
 
+## 预备姿势
+- 使用拼好模链接优惠
+- 提前充值金额
+- 提前10~20min进入网址
+
+
 ## 功能
 
 - 准点自动点击指定套餐购买按钮

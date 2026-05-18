@@ -5,7 +5,8 @@
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
 // @author       Codex
 // @match        *://bigmodel.cn/glm-coding*
-// @match        https://www.bigmodel.cn/glm-coding*
+// @match        https://www.bigmodel.cn/glm-coding
+// @match        https://www.bigmodel.cn/glm-coding?ic*
 // @match        *://bigmodel.cn/usercenter/glm-coding*
 // @match        *://bigmodel.cn/html/rate-limit.html*
 // @grant        GM_xmlhttpRequest
