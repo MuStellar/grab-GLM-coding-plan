@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GLM Coding 全自动抢购助手 (增强版) v1.0
+// @name         GLM Coding 全自动抢购助手 (增强版) v1.6
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.6
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
 // @author       Codex
 // @match        *://bigmodel.cn/glm-coding*
@@ -243,6 +243,7 @@
 
   // 调用本地 Python 识别服务自动解决验证码
   const CAPTCHA_API = 'http://127.0.0.1:8123/api/v1/identify';
+  const SERVICE_HEALTH_URL = 'http://127.0.0.1:8123/';
 
   // 用 GM_xmlhttpRequest 发起请求（绕过 CORS）
   function gmFetch(url, options = {}) {
@@ -253,9 +254,18 @@
         headers: options.headers || {},
         data: options.body,
         responseType: options.responseType || 'text',
+        timeout: options.timeout || 0,
         onload(resp) { resolve(resp); },
-        onerror(err) { reject(err); },
-        ontimeout(err) { reject(err); },
+        onerror(err) {
+          const e = new Error('网络请求失败（连不上 ' + url + '）' + (err && err.error ? ' - ' + err.error : ''));
+          e.isNetworkError = true;
+          reject(e);
+        },
+        ontimeout() {
+          const e = new Error('请求超时（' + url + '）');
+          e.isNetworkError = true;
+          reject(e);
+        },
       });
     });
   }
@@ -430,6 +440,7 @@
         return false;
       }
 
+      setServiceWarning(false); // 成功拿到识别结果，说明服务在线
       log(`识别到 ${points.length} 个目标，原图尺寸: ${origW}x${origH}`);
 
       // 计算缩放比例
@@ -465,7 +476,12 @@
       log('验证码自动识别完成');
       return true;
     } catch (e) {
-      log('验证码识别异常: ' + e.message);
+      if (e && e.isNetworkError) {
+        setServiceWarning(true);
+        log('❌ 无法连接本地识别服务，请确认 service.py 已在 8123 端口运行');
+      } else {
+        log('验证码识别异常: ' + (e && e.message ? e.message : String(e)));
+      }
       return false;
     }
   }
@@ -542,7 +558,41 @@
     const renderedText = lastStatusText || '就绪';
     if (renderedText === lastRenderedStatusText) return;
     lastRenderedStatusText = renderedText;
-    if (el) el.textContent = renderedText;
+    if (!el) return;
+    el.textContent = renderedText;
+    let state = 'active';
+    if (/完成|成功/.test(renderedText)) state = 'success';
+    else if (/停止|过时间|超限|失败|异常|错误/.test(renderedText)) state = 'danger';
+    else if (/验证码/.test(renderedText)) state = 'info';
+    else if (/就绪|准备/.test(renderedText)) state = 'idle';
+    el.dataset.state = state;
+  }
+
+  // 同步标题栏指示灯与切换按钮的运行状态
+  function refreshControls() {
+    const dot = document.getElementById('glm-simple-dot-v16');
+    const btn = document.getElementById('glm-simple-toggle-v16');
+    if (dot) dot.dataset.state = hasCompleted ? 'done' : (isWatching ? 'running' : 'idle');
+    if (btn) {
+      btn.textContent = isWatching ? '■ 停止监听' : '▶ 开始监听';
+      btn.dataset.mode = isWatching ? 'stop' : 'start';
+    }
+  }
+
+  // 显示/隐藏"识别服务未连接"红色警告条
+  function setServiceWarning(show) {
+    const warn = document.getElementById('glm-simple-warn-v16');
+    if (warn) warn.style.display = show ? '' : 'none';
+  }
+
+  // 探测本地识别服务是否在线（开抢前预检，避免到验证码才发现没开）
+  async function checkServiceHealth() {
+    try {
+      await gmFetch(SERVICE_HEALTH_URL, { method: 'GET', timeout: 3000 });
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function updateStatus(text) {
@@ -551,8 +601,8 @@
   }
 
   function getIdleStatusText() {
-    const countdown = getCountdown();
-    return countdown ? `倒计时 ${countdown}` : '已到点，等待重试闭环';
+    if (!isWatching) return '就绪';
+    return Date.now() < targetTimestamp ? '监听中 · 等待到点' : '已到点 · 重试抢购中';
   }
 
   function getRateLimitRedirectTarget() {
@@ -607,6 +657,7 @@
   let isClicking = false;
   let hasCompleted = false; // 取代 hasClicked，只有出现真实支付框才设为true
   let targetTimestamp = 0;
+  let countdownTimer = null;
   let lastCycleSwitchAt = 0;
   let lastStatusText = '';
   let lastRenderedStatusText = '';
@@ -647,7 +698,7 @@
 
   function log(msg) {
     console.log(`[Auto-GLM-1.6] ${msg}`);
-    const logBox = document.getElementById('glm-simple-log');
+    const logBox = document.getElementById('glm-simple-log-v16');
     if (logBox) {
       const time = new Date().toLocaleTimeString();
       logBox.innerHTML = `<div>[${time}] ${escapeHtml(msg)}</div>` + logBox.innerHTML;
@@ -660,7 +711,13 @@
   }
 
   function getTargetDate(now = new Date()) {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), config.targetHour, config.targetMinute, config.targetSecond || 0, 0);
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), config.targetHour, config.targetMinute, config.targetSecond || 0, 0);
+    // 今日目标时间已过且超出宽限窗口 → 自动顺延到明天，方便提前一晚挂机抢次日。
+    // 仍在宽限窗口内则保留今天（startWatching 会立即进入抢购重试，支持"晚到也能补抢"）。
+    if (now.getTime() > d.getTime() + WATCH_GRACE_MS) {
+      d.setDate(d.getDate() + 1);
+    }
+    return d;
   }
 
   function refreshTargetTimestamp() { targetTimestamp = getTargetDate().getTime(); }
@@ -772,13 +829,32 @@
 
   function isTargetWindowExpired(now = Date.now()) { return now > targetTimestamp + WATCH_GRACE_MS; }
 
-  function getCountdown() {
-    const diff = targetTimestamp - Date.now();
-    if (diff <= 0) return null;
-    const h = Math.floor(diff / (1000 * 60 * 60));
-    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    const s = Math.floor((diff % (1000 * 60)) / 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  function pad2(n) { return String(n).padStart(2, '0'); }
+
+  function isSameDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+
+  // 独立的倒计时渲染：监听中锁定 targetTimestamp；未监听时实时预览下一次目标时间
+  function renderCountdown() {
+    const clock = document.getElementById('glm-simple-countdown-v16');
+    const sub = document.getElementById('glm-simple-target-v16');
+    if (!clock) return;
+    const now = Date.now();
+    const targetMs = isWatching ? targetTimestamp : getTargetDate().getTime();
+    const diff = targetMs - now;
+    if (diff <= 0) {
+      clock.textContent = isWatching ? '抢购中…' : '00:00:00';
+    } else {
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      clock.textContent = `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+    }
+    if (sub) {
+      const dayLabel = isSameDay(new Date(targetMs), new Date(now)) ? '今天' : '明天';
+      sub.textContent = `目标 ${dayLabel} ${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
+    }
   }
 
   async function triggerBuyButton(button) {
@@ -920,6 +996,8 @@
     isWatching = false;
     if (logMessage) log(logMessage);
     updateStatus(statusText);
+    refreshControls();
+    renderCountdown();
   }
 
   function getDialogRetryDelay() { return DIALOG_RETRY_BASE_DELAY_MS + Math.floor(Math.random() * DIALOG_RETRY_RANDOM_MS); }
@@ -939,7 +1017,16 @@
     const ts = `${config.targetHour}:${String(config.targetMinute).padStart(2, '0')}:${String(config.targetSecond || 0).padStart(2, '0')}`;
     log(`开始闭环监听，目标时间: ${ts}`);
     updateStatus(getIdleStatusText());
+    refreshControls();
+    renderCountdown();
     scheduleNextTick(0);
+
+    // 开抢前预检本地识别服务，未启动则红条提示（不阻断监听，购买点击不依赖该服务）
+    checkServiceHealth().then(ok => {
+      setServiceWarning(!ok);
+      if (!ok) log('⚠️ 本地识别服务未连接（8123），请先运行 service.py，否则验证码无法自动识别');
+      else log('识别服务已连接 ✓');
+    });
   }
 
   function resetClicked() {
@@ -975,25 +1062,43 @@
     const s = document.createElement('style');
     s.id = 'glm-simple-style-v16';
     s.textContent = `
-      #glm-simple-panel-v16{position:fixed;left:20px;bottom:20px;width:300px;z-index:999999;border-radius:16px;overflow:hidden;background:linear-gradient(135deg,#133054 0%,#182a74 64%,#1d4ed8 100%);box-shadow:0 24px 64px -28px rgba(16,35,63,.45);font-family:"SF Pro Display","PingFang SC","Segoe UI",sans-serif;color:#eff6ff}
+      #glm-simple-panel-v16{position:fixed;left:20px;bottom:20px;width:288px;z-index:999999;border-radius:16px;overflow:hidden;background:#fff;border:1px solid #e6e8ef;box-shadow:0 18px 50px -20px rgba(30,41,59,.45);font-family:"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;color:#1e293b;font-size:13px}
       #glm-simple-panel-v16 *{box-sizing:border-box}
-      .glm-simple-head-v16{padding:14px 16px; display:flex; justify-content:space-between; align-items:center;}
-      .glm-simple-title-v16{font-size:14px;font-weight:700}
-      .glm-simple-body-v16{padding:12px 14px;background:rgba(255,255,255,.95);color:#1e293b}
-      .glm-simple-row-v16{display:flex;gap:8px;margin-bottom:10px}
-      .glm-simple-field-v16{flex:1}
-      .glm-simple-field-v16 label{display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:4px}
-      .glm-simple-field-v16 select,.glm-simple-field-v16 input{width:100%;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;background:#f8fafc}
-      .glm-simple-time-v16{display:flex;align-items:center;gap:4px}
-      .glm-simple-time-v16 input{width:50px;text-align:center}
-      .glm-simple-time-v16 span{font-size:12px;color:#64748b}
-      .glm-simple-status-v16{font-size:13px;margin-bottom:10px;padding:8px;background:#f1f5f9;border-radius:8px;text-align:center;font-weight:bold;color:#1e40af;}
-      .glm-simple-actions-v16{display:flex;gap:8px}
-      .glm-simple-btn-v16{flex:1;padding:8px 12px;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;color:#fff;background:linear-gradient(135deg,#1d4ed8,#0ea5e9);transition:all .2s;}
-      .glm-simple-btn-v16:hover{opacity:0.9; transform:translateY(-1px);}
-      .glm-simple-btn-v16.secondary{color:#475569;background:#e2e8f0}
-      .glm-simple-log-v16{margin-top:10px;max-height:100px;overflow:auto;font-size:11px;color:#334155;background:#f8fafc;border-radius:8px;padding:6px 8px;line-height:1.4;}
-      .glm-simple-badge-v16{font-size:10px; background:#ef4444; color:white; padding:2px 6px; border-radius:10px;}
+      #glm-simple-panel-v16 .glm-head{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff}
+      #glm-simple-panel-v16 .glm-head-left{display:flex;align-items:center;gap:8px}
+      #glm-simple-panel-v16 .glm-title{font-size:14px;font-weight:700;letter-spacing:.3px}
+      #glm-simple-panel-v16 .glm-badge{font-size:10px;font-weight:600;background:rgba(255,255,255,.22);padding:1px 6px;border-radius:8px}
+      #glm-simple-panel-v16 .glm-dot{width:9px;height:9px;border-radius:50%;background:#cbd5e1;flex:none}
+      #glm-simple-panel-v16 .glm-dot[data-state="running"]{background:#22c55e;animation:glmPulse 1.4s infinite}
+      #glm-simple-panel-v16 .glm-dot[data-state="done"]{background:#fbbf24}
+      @keyframes glmPulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+      #glm-simple-panel-v16 .glm-collapse{border:none;background:rgba(255,255,255,.18);color:#fff;width:22px;height:22px;border-radius:7px;cursor:pointer;font-size:16px;line-height:1;font-weight:700;display:flex;align-items:center;justify-content:center}
+      #glm-simple-panel-v16 .glm-collapse:hover{background:rgba(255,255,255,.34)}
+      #glm-simple-panel-v16 .glm-body{padding:14px}
+      #glm-simple-panel-v16 .glm-clock-wrap{text-align:center;padding:12px 8px;margin-bottom:12px;background:#f1f5ff;border:1px solid #e0e7ff;border-radius:12px}
+      #glm-simple-panel-v16 .glm-clock{font-size:30px;font-weight:800;letter-spacing:1px;color:#4338ca;font-variant-numeric:tabular-nums;font-family:"SF Mono",Consolas,"Courier New",monospace}
+      #glm-simple-panel-v16 .glm-target{margin-top:4px;font-size:11px;color:#6b7280}
+      #glm-simple-panel-v16 .glm-grid{display:flex;gap:8px;margin-bottom:10px}
+      #glm-simple-panel-v16 .glm-fld{flex:1;display:block}
+      #glm-simple-panel-v16 .glm-fld>span{display:block;font-size:11px;font-weight:600;color:#64748b;margin-bottom:4px}
+      #glm-simple-panel-v16 .glm-fld select,#glm-simple-panel-v16 .glm-fld input{width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:9px;font-size:13px;background:#fff;color:#1e293b;outline:none}
+      #glm-simple-panel-v16 .glm-fld select:focus,#glm-simple-panel-v16 .glm-fld input:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.15)}
+      #glm-simple-panel-v16 .glm-fld-time{margin-bottom:12px}
+      #glm-simple-panel-v16 .glm-fld-time input{font-variant-numeric:tabular-nums;letter-spacing:1px}
+      #glm-simple-panel-v16 .glm-status{text-align:center;font-weight:700;font-size:12px;padding:8px;border-radius:9px;margin-bottom:10px;background:#f1f5f9;color:#64748b;transition:background .2s,color .2s}
+      #glm-simple-panel-v16 .glm-status[data-state="active"]{background:#eef2ff;color:#4338ca}
+      #glm-simple-panel-v16 .glm-status[data-state="info"]{background:#e0f2fe;color:#0369a1}
+      #glm-simple-panel-v16 .glm-status[data-state="success"]{background:#dcfce7;color:#15803d}
+      #glm-simple-panel-v16 .glm-status[data-state="danger"]{background:#fee2e2;color:#b91c1c}
+      #glm-simple-panel-v16 .glm-warn{font-size:11px;font-weight:600;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:9px;padding:7px 9px;margin-bottom:10px;line-height:1.4}
+      #glm-simple-panel-v16 .glm-toggle{width:100%;padding:11px;border:none;border-radius:11px;font-size:14px;font-weight:700;cursor:pointer;color:#fff;background:linear-gradient(135deg,#4f46e5,#6366f1);transition:filter .15s,transform .15s}
+      #glm-simple-panel-v16 .glm-toggle:hover{filter:brightness(1.06);transform:translateY(-1px)}
+      #glm-simple-panel-v16 .glm-toggle:active{transform:translateY(0)}
+      #glm-simple-panel-v16 .glm-toggle[data-mode="stop"]{background:linear-gradient(135deg,#ef4444,#f43f5e)}
+      #glm-simple-panel-v16 .glm-log{margin-top:12px;max-height:96px;overflow:auto;font-size:11px;color:#475569;background:#f8fafc;border:1px solid #eef2f7;border-radius:9px;padding:7px 9px;line-height:1.5}
+      #glm-simple-panel-v16 .glm-log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #glm-simple-panel-v16 .glm-log::-webkit-scrollbar{width:6px}
+      #glm-simple-panel-v16 .glm-log::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
     `;
     document.head.appendChild(s);
   }
@@ -1003,59 +1108,77 @@
     const panel = document.createElement('div');
     panel.id = 'glm-simple-panel-v16';
     panel.innerHTML = `
-      <div class="glm-simple-head-v16">
-         <div class="glm-simple-title-v16">GLM 抢购助手 <span class="glm-simple-badge-v16">v1.6 闭环版</span></div>
+      <div class="glm-head">
+        <div class="glm-head-left">
+          <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
+          <span class="glm-title">GLM 抢购助手</span>
+          <span class="glm-badge">v1.6</span>
+        </div>
+        <button class="glm-collapse" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
       </div>
-      <div class="glm-simple-body-v16">
-        <div class="glm-simple-row-v16">
-          <div class="glm-simple-field-v16">
-            <label>套餐设置</label>
+      <div class="glm-body" id="glm-simple-body-v16">
+        <div class="glm-clock-wrap">
+          <div class="glm-clock" id="glm-simple-countdown-v16">--:--:--</div>
+          <div class="glm-target" id="glm-simple-target-v16">目标 —</div>
+        </div>
+        <div class="glm-grid">
+          <label class="glm-fld"><span>套餐</span>
             <select id="glm-simple-plan-v16"><option value="Lite">Lite</option><option value="Pro">Pro</option><option value="Max">Max</option></select>
-          </div>
-          <div class="glm-simple-field-v16">
-            <label>购买周期</label>
+          </label>
+          <label class="glm-fld"><span>周期</span>
             <select id="glm-simple-cycle-v16"><option value="month">连续包月</option><option value="quarter">连续包季</option><option value="year">连续包年</option></select>
-          </div>
+          </label>
         </div>
-        <div class="glm-simple-row-v16 glm-simple-time-v16">
-          <div class="glm-simple-field-v16"><label>目标时</label><input id="glm-simple-hour-v16" type="number" min="0" max="23"></div><span>:</span>
-          <div class="glm-simple-field-v16"><label>目标分</label><input id="glm-simple-minute-v16" type="number" min="0" max="59"></div><span>:</span>
-          <div class="glm-simple-field-v16"><label>目标秒</label><input id="glm-simple-second-v16" type="number" min="0" max="59"></div>
-        </div>
-        <div class="glm-simple-status-v16" id="glm-simple-status-v16">就绪</div>
-        <div class="glm-simple-actions-v16">
-          <button class="glm-simple-btn-v16" id="glm-simple-start-v16" type="button">开启自动重试购买</button>
-          <button class="glm-simple-btn-v16 secondary" id="glm-simple-stop-v16" style="flex:0.6" type="button">停止</button>
-        </div>
-        <div class="glm-simple-log-v16" id="glm-simple-log-v16"></div>
+        <label class="glm-fld glm-fld-time"><span>抢购时间（时:分:秒）</span>
+          <input id="glm-simple-time-v16" type="time" step="1">
+        </label>
+        <div class="glm-status" id="glm-simple-status-v16" data-state="idle">就绪</div>
+        <div class="glm-warn" id="glm-simple-warn-v16" style="display:none">⚠️ 识别服务未连接，请先运行 service.py（端口 8123）</div>
+        <button class="glm-toggle" id="glm-simple-toggle-v16" data-mode="start" type="button">▶ 开始监听</button>
+        <div class="glm-log" id="glm-simple-log-v16"></div>
       </div>`;
     document.body.appendChild(panel);
 
     const planEl = document.getElementById('glm-simple-plan-v16');
     const cycleEl = document.getElementById('glm-simple-cycle-v16');
-    const hourEl = document.getElementById('glm-simple-hour-v16');
-    const minEl = document.getElementById('glm-simple-minute-v16');
-    const secEl = document.getElementById('glm-simple-second-v16');
+    const timeEl = document.getElementById('glm-simple-time-v16');
 
     planEl.value = config.targetPlan;
     cycleEl.value = config.billingCycle;
-    hourEl.value = config.targetHour;
-    minEl.value = config.targetMinute;
-    secEl.value = config.targetSecond || 0;
+    timeEl.value = `${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
 
-    planEl.addEventListener('change', () => { config.targetPlan = planEl.value; handleConfigChange(); });
+    planEl.addEventListener('change', () => { config.targetPlan = planEl.value; handleConfigChange(); renderCountdown(); });
     cycleEl.addEventListener('change', () => { config.billingCycle = cycleEl.value; handleConfigChange(); });
-    hourEl.addEventListener('change', () => { config.targetHour = Math.max(0, Math.min(23, Number(hourEl.value) || 0)); hourEl.value = config.targetHour; handleConfigChange(); });
-    minEl.addEventListener('change', () => { config.targetMinute = Math.max(0, Math.min(59, Number(minEl.value) || 0)); minEl.value = config.targetMinute; handleConfigChange(); });
-    secEl.addEventListener('change', () => { config.targetSecond = Math.max(0, Math.min(59, Number(secEl.value) || 0)); secEl.value = config.targetSecond; handleConfigChange(); });
+    timeEl.addEventListener('change', () => {
+      const parts = String(timeEl.value || '').split(':').map(Number);
+      config.targetHour = clampNumber(parts[0], 0, 23, config.targetHour);
+      config.targetMinute = clampNumber(parts[1], 0, 59, config.targetMinute);
+      config.targetSecond = clampNumber(parts[2], 0, 59, 0);
+      timeEl.value = `${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond)}`;
+      handleConfigChange();
+      renderCountdown();
+    });
 
-    document.getElementById('glm-simple-start-v16').addEventListener('click', startWatching);
-    document.getElementById('glm-simple-stop-v16').addEventListener('click', () => { stopWatching(); });
+    document.getElementById('glm-simple-toggle-v16').addEventListener('click', () => {
+      if (isWatching) stopWatching({ statusText: '已停止', logMessage: '已手动停止监听' });
+      else startWatching();
+    });
+    document.getElementById('glm-simple-collapse-v16').addEventListener('click', () => {
+      const body = document.getElementById('glm-simple-body-v16');
+      const btn = document.getElementById('glm-simple-collapse-v16');
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      btn.textContent = collapsed ? '–' : '+';
+    });
+
+    refreshControls();
+    renderCountdown();
   }
 
   function bootstrap() {
     injectStyles();
     buildPanel();
+    if (!countdownTimer) countdownTimer = setInterval(renderCountdown, 500);
     updateStatus('准备就绪');
     log('脚本引擎加载完毕 v1.6 (闭环重组)');
   }
