@@ -85,6 +85,8 @@ GLM Coding 套餐准点自动抢购，自动识别腾讯点选验证码。验证
 | targetMinute | 目标分 | 0-59 |
 | targetSecond | 目标秒 | 0-59 |
 
+默认抢的是 Lite 连续包月（billingCycle 为 month），目标时间 10:00:00。两种用法默认一致。
+
 ## 相比原项目新增功能
 
 基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 的验证码识别能力，本项目新增：
