@@ -18,26 +18,44 @@
 - 弹窗自动检测与重试闭环
 - 可视化控制面板（套餐/周期/时间配置）
 
-## 使用方式
+## 准备工作（两种方式都要）
 
-### 方式一：油猴脚本（推荐）
+1. **安装 Python 3.8+**：到 [python.org](https://www.python.org/downloads/) 下载，安装时**务必勾选 “Add Python to PATH”**（这是新手最常漏的一步）。
+2. **安装 Google Chrome**：Playwright 全自动方式会调用系统已装的 Chrome（`channel="chrome"`，无需 `playwright install`）。
 
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展
+依赖的安装与启动，下面**一键脚本**会自动帮你完成，无需手动敲命令。
 
-2. 启动本地验证码识别服务：
+## 一键启动（推荐）
+
+下载/克隆本仓库后，按你的系统双击或运行对应脚本，它会自动**建虚拟环境 → 装依赖 → 让你选模式启动**：
+
+- **Windows**：双击 [`start.cmd`](start.cmd)
+- **Linux / macOS**：终端里运行 `chmod +x start.sh && ./start.sh`
+
+运行后会让你二选一：
+
+```
+1) Playwright 全自动抢购（推荐：免油猴、免单独起服务）
+2) 启动验证码识别服务（配合油猴脚本 glm.js 使用）
+```
+
+> 首次运行会创建 `.venv` 虚拟环境并联网装依赖，较慢；之后再启动就很快了。依赖只装在项目里的 `.venv`，不污染系统 Python。
+
+抢购参数（套餐 / 周期 / 时间）：Playwright 方式改 [glm.py](glm.py) 顶部的 `CONFIG`；油猴方式在页面左下角控制面板里改。
+
+## 手动方式（不想用一键脚本时）
+
+> 以下命令二选一即可；推荐先建虚拟环境：`python -m venv .venv` 再激活
+> （Windows：`.venv\Scripts\activate`；Linux/macOS：`source .venv/bin/activate`）。
+
+### 方式一：油猴脚本
 
 ```bash
 pip install -r requirements.txt
-python service.py
+python service.py        # 验证码识别服务，默认 http://127.0.0.1:8123，保持开着
 ```
 
-服务默认运行在 `http://127.0.0.1:8123`
-
-3. 将 [glm.js](glm.js) 添加为油猴脚本
-
-4. 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)，页面左下角会出现控制面板
-
-5. 在面板中配置套餐、周期和目标时间，点击「开启自动重试购买」
+然后：安装 [Tampermonkey](https://www.tampermonkey.net/) → 把 [glm.js](glm.js) 添加为油猴脚本 → 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A) → 左下角控制面板里配置套餐/周期/时间 → 点「开启自动重试购买」。
 
 ### 方式二：Python (Playwright，全自动)
 
@@ -45,13 +63,6 @@ python service.py
 
 ```bash
 pip install -r requirements.txt
-```
-
-> 需本机已安装 Google Chrome（脚本用 `channel="chrome"` 调用系统 Chrome，不依赖 `playwright install`）。
-
-编辑 [glm.py](glm.py) 中的 `CONFIG` 设置套餐、周期与目标时分秒，然后：
-
-```bash
 python glm.py
 ```
 
@@ -64,6 +75,21 @@ python glm.py
 5. 想退出：关闭浏览器窗口，或在终端按 `Ctrl+C`——注意 `Ctrl+C` 会随手关掉脚本启动的这个浏览器（终端信号会一并发给 Chrome 子进程，无法避免），所以**扫完码再退**
 
 > 注意：抢购时只认 `CONFIG` 里的**时分秒**、抢的是**当天**那个时刻；当天该时刻已过会立即开抢。
+
+## 跨平台说明（Windows / Linux / macOS）
+
+代码不写死任何单一系统：文件路径用 `os.path` 拼接、Chrome 用 Playwright 的 `channel="chrome"` 按系统自动定位、CJK 字体在 [src/captcha.py](src/captcha.py) 里准备了三大系统的候选路径（找不到会明确报错而非静默渲染失败）。
+
+仓库带了一个 [跨平台冒烟测试](.github/workflows/smoke.yml)（GitHub Actions），在 Ubuntu / macOS / Windows × Python 3.10/3.12 上自动验证：依赖可安装、模块可导入、关键路径与中文字体在各系统都能解析。想本地自测某个系统，最省事的是用 Docker 跑 Linux：
+
+```bash
+docker run --rm -it -v "${PWD}:/app" -w /app python:3.12 bash -lc \
+  "apt-get update && apt-get install -y fonts-noto-cjk && pip install -r requirements.txt && \
+   python -m py_compile glm.py service.py && \
+   python -c 'from src.captcha import _load_cjk_font; _load_cjk_font(40); print(\"ok\")'"
+```
+
+macOS 没有官方容器，需在真机或 CI（如上面的 Actions）上验证。
 
 ## 配置说明
 

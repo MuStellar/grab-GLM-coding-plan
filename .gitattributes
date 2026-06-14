@@ -1,0 +1,7 @@
+# 强制 LF：Linux/macOS 的 shell 脚本若带 CRLF，shebang 会变成 "/usr/bin/env bash\r" 而无法运行。
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+# Windows 批处理保持 CRLF。
+*.cmd   text eol=crlf
+*.bat   text eol=crlf

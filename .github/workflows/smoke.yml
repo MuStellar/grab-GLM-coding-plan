@@ -1,0 +1,50 @@
+name: cross-platform smoke test
+
+# 跨平台冒烟测试：在 Ubuntu / macOS / Windows 上验证依赖可装、模块可导入、
+# 关键路径（文件路径拼接、CJK 字体解析）不写死某一个系统。
+# 不真正启动 Chrome 抢购，只验证代码在三大系统上能跑起来。
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Linux 运行器默认没有中文字体，装一个供字体解析测试用。
+      - name: Install CJK font (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile sources
+        run: |
+          python -m py_compile glm.py service.py demo.py
+
+      - name: Import smoke
+        run: |
+          python -c "import playwright.sync_api, onnxruntime, cv2, fastapi, uvicorn; print('imports ok')"
+
+      # 关键：验证 src/captcha.py 的 CJK 字体候选在本系统能命中（写死单系统会在这里失败）。
+      - name: CJK font resolves on this OS
+        run: |
+          python -c "from src.captcha import _load_cjk_font; _load_cjk_font(40); print('CJK font ok')"

@@ -22,3 +22,5 @@ res2.jpg
 *.jpg
 *.png
 .chrome-profile/
+.venv/
+venv/
