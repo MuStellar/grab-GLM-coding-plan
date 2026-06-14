@@ -18,78 +18,72 @@
 - 弹窗自动检测与重试闭环
 - 可视化控制面板（套餐/周期/时间配置）
 
+## 两种用法，先选一种
+
+| | 方式一 · Playwright 全自动（推荐） | 方式二 · 油猴脚本 |
+|---|---|---|
+| 体验 | 启动后**真·全自动**，无需油猴、无需粘贴脚本 | 有可视化面板，但**必须手动把 `glm.js` 粘进 Tampermonkey**，并另起识别服务 |
+| 适合 | 怕麻烦、想一条命令搞定 | 喜欢浏览器面板、已习惯油猴 |
+| 验证码识别 | 脚本进程内完成 | 需单独起 `service.py` |
+
+> ⚠️ **关于「一键脚本」的常见误解**：`start.cmd` / `start.sh` 只负责帮你**装依赖、起 Python 进程**。选方式二（油猴）时，它仅仅是把**验证码识别服务**跑起来——`glm.js` 这个油猴脚本**仍然要你亲手粘进 Tampermonkey**，一键脚本不会替你做这步。
+
 ## 准备工作（两种方式都要）
 
-1. **安装 Python 3.8+**：到 [python.org](https://www.python.org/downloads/) 下载，安装时**务必勾选 “Add Python to PATH”**（这是新手最常漏的一步）。
-2. **安装 Google Chrome**：Playwright 全自动方式会调用系统已装的 Chrome（`channel="chrome"`，无需 `playwright install`）。
+1. **安装 Python 3.8+**：到 [python.org](https://www.python.org/downloads/) 下载，安装时**务必勾选 “Add Python to PATH”**（新手最常漏的一步）。
+2. **安装 Google Chrome**：方式一会调用系统已装的 Chrome（`channel="chrome"`，无需 `playwright install`）。
 
-依赖的安装与启动，下面**一键脚本**会自动帮你完成，无需手动敲命令。
+> 依赖安装和进程启动都可交给**一键脚本**：Windows 双击 [`start.cmd`](start.cmd)，Linux/macOS 运行 `chmod +x start.sh && ./start.sh`。它会自动**建 `.venv` 虚拟环境 → 装依赖 → 让你选 `1`/`2` 启动**（`1`=方式一，`2`=方式二的识别服务）。首次较慢，之后很快；依赖只装在项目内的 `.venv`，不污染系统 Python。
+>
+> （`start.cmd` 菜单是英文：`cmd.exe` 无法可靠解析含中文的批处理文件，会乱码、切断命令，故 Windows 版只用英文；`start.sh` 不受此限，用的中文。）
 
-## 一键启动（推荐）
+---
 
-下载/克隆本仓库后，按你的系统双击或运行对应脚本，它会自动**建虚拟环境 → 装依赖 → 让你选模式启动**：
+## 方式一：Playwright 全自动（推荐）
 
-- **Windows**：双击 [`start.cmd`](start.cmd)
-- **Linux / macOS**：终端里运行 `chmod +x start.sh && ./start.sh`
+**启动**（任选其一）：
 
-运行后会让你二选一（脚本提示为英文，含义如下）：
+- 一键：双击 [`start.cmd`](start.cmd)（Win）/ 运行 `./start.sh`（Linux/macOS）→ 选 **1**
+- 手动：`pip install -r requirements.txt` 后 `python glm.py`
 
-```
-1) Playwright fully-automatic grab   → Playwright 全自动抢购（推荐：免油猴、免单独起服务）
-2) Start captcha recognition service → 启动验证码识别服务（配合油猴脚本 glm.js 使用）
-```
+**配置**：抢购参数（套餐 / 周期 / 时间）改 [glm.py](glm.py) 顶部的 `CONFIG`。
 
-输入 `1` 或 `2` 回车即可。
+**运行流程**：
 
-> 为什么 Windows 脚本是英文？因为 `cmd.exe` 无法可靠解析含中文的批处理文件（会把命令切断、乱码），所以 `start.cmd` 故意只用英文；`start.sh`（Linux/macOS）不受此限，用的是中文。
+1. 自动打开一个**专用配置的 Chrome 窗口**（项目目录下的 `.chrome-profile`，与你日常 Chrome 互不干扰，**无需关闭日常 Chrome**），并跳转到 glm-coding 抢购页
+2. 未登录时网站会自动弹出登录框 → 在该窗口内用手机号+验证码登录（**无需回到终端按键**，脚本自动检测登录完成后继续；登录态保存在 `.chrome-profile`，下次免登录）
+3. 进入倒计时 → 到点自动选周期、点购买 → 遇腾讯点选验证码自动识别并点选提交
+4. 抢到后自动停止点击、保持浏览器停在支付弹窗，你可从容扫码支付（其间脚本不再点击，不会把支付窗口点没）
+5. 退出见下方「[退出 / 停止](#退出--停止)」
 
-> 首次运行会创建 `.venv` 虚拟环境并联网装依赖，较慢；之后再启动就很快了。依赖只装在项目里的 `.venv`，不污染系统 Python。
+> 时间规则：抢购只认 `CONFIG` 里的**时分秒**。当天目标时刻起 **40 分钟内**打开都抢**当天**（已过点则立即开抢，正好赶回流）；**超过 40 分钟**（如默认 10:00 → 10:40 之后）才打开则自动滚到**明天**同一时刻。油猴版同此规则。
 
-抢购参数（套餐 / 周期 / 时间）：Playwright 方式改 [glm.py](glm.py) 顶部的 `CONFIG`；油猴方式在页面左下角控制面板里改。
+---
 
-## 手动方式（不想用一键脚本时）
+## 方式二：油猴脚本
 
-> 以下命令二选一即可；推荐先建虚拟环境：`python -m venv .venv` 再激活
-> （Windows：`.venv\Scripts\activate`；Linux/macOS：`source .venv/bin/activate`）。
+> 油猴（[Tampermonkey](https://www.tampermonkey.net/)）是个浏览器扩展，能在指定网页上自动运行你装进去的「用户脚本」。本项目的 [glm.js](glm.js) 就是这样一个脚本——**它不会被一键脚本自动安装，得你手动粘进油猴**。
 
-### 方式一：油猴脚本
+### 第 1 步 · 起验证码识别服务（保持开着）
 
-先起验证码识别服务（一键脚本选 `2`，或手动）：
+- 一键：双击 [`start.cmd`](start.cmd) / 运行 `./start.sh` → 选 **2**
+- 手动：`pip install -r requirements.txt` 后 `python service.py`
 
-```bash
-pip install -r requirements.txt
-python service.py        # 验证码识别服务，默认 http://127.0.0.1:8123，保持开着
-```
+服务跑在 `http://127.0.0.1:8123`，**抢购期间这个窗口别关**（关了就识别不了验证码）。
 
-然后把 [glm.js](glm.js) 装进油猴。**是的，油猴脚本需要把脚本内容放进浏览器扩展里**（油猴不会直接读本地 `.js` 文件），步骤：
+### 第 2 步 · 把 glm.js 装进油猴（必须手动）
 
 1. 浏览器装 [Tampermonkey](https://www.tampermonkey.net/) 扩展。
 2. 点扩展图标 →「**管理面板 / Dashboard**」→ 顶部「**＋**」新建脚本。
 3. 把编辑器里的模板**全选删除**，打开本仓库的 [glm.js](glm.js)，**全文复制粘贴**进去。
 4. 按 **Ctrl+S** 保存。脚本头部带 `@match`，会自动绑定到 glm-coding 页面。
-5. 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)，左下角自动出现控制面板。
-6. 面板里配置套餐 / 周期 / 时间，点「**▶ 开始监听**」。到点后会自动抢；想停手点「**■ 停止监听**」。
+5. 脚本有更新时（如版本号变了），重复 3–4 把新内容覆盖粘贴进同一个脚本即可。
 
-> 脚本有更新时（比如版本号变了），重复步骤 3–4 把新内容覆盖粘贴进同一个脚本即可。
+### 第 3 步 · 开抢
 
-### 方式二：Python (Playwright，全自动)
-
-无需油猴、无需单独启动 `service.py`——验证码识别在脚本进程内直接完成。
-
-```bash
-pip install -r requirements.txt
-python glm.py
-```
-
-运行流程：
-
-1. 自动打开一个**专用配置的 Chrome 窗口**（项目目录下的 `.chrome-profile`，与你日常 Chrome 互不干扰，**无需关闭日常 Chrome**），并跳转到 glm-coding 抢购页
-2. 未登录时网站会自动弹出登录框 → 在该窗口内用手机号+验证码登录（**无需回到终端按键**，脚本自动检测登录完成后继续；登录态会保存在 `.chrome-profile`，下次免登录）
-3. 进入倒计时 → 到点自动选周期、点购买 → 遇腾讯点选验证码自动识别并点选提交
-4. 抢到后自动停止点击、保持浏览器停在支付弹窗，你可从容扫码支付（其间脚本不再点击，不会把支付窗口点没）
-5. 想退出：关闭浏览器窗口，或在终端按 `Ctrl+C`——注意 `Ctrl+C` 会随手关掉脚本启动的这个浏览器（终端信号会一并发给 Chrome 子进程，无法避免），所以**扫完码再退**
-
-> 注意：抢购只认 `CONFIG` 里的**时分秒**。当天目标时刻起 **40 分钟内**打开都抢**当天**（已过点则立即开抢，正好赶回流）；**超过 40 分钟**（如默认 10:00 → 10:40 之后）才打开则自动滚到**明天**同一时刻。油猴版同此规则。
+1. 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)，左下角自动出现控制面板。
+2. 面板里配置套餐 / 周期 / 时间。
+3. 点「**▶ 开始监听**」。到点自动抢，想停手点「**■ 停止监听**」。
 
 ## 退出 / 停止
 
