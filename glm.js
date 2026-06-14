@@ -12,12 +12,18 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        unsafeWindow
+// @connect      127.0.0.1
+// @connect      localhost
+// @connect      qcloud.com
+// @connect      captcha.qq.com
+// @connect      gtimg.com
+// @connect      *
 // @run-at       document-start
 // ==/UserScript==
 //
 // ============================================================
 // 使用说明：
-// 如遇弹窗（购买人数多/无价格）会自动重发。如遇腾讯验证码，脚本会暂停并等待人工完成后继续。
+// 如遇弹窗（购买人数多/无价格）会自动重发。
 // ============================================================
 
 (function () {
@@ -248,13 +254,12 @@
   // 用 GM_xmlhttpRequest 发起请求（绕过 CORS）
   function gmFetch(url, options = {}) {
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+      const cfg = {
         method: options.method || 'GET',
         url: url,
         headers: options.headers || {},
         data: options.body,
         responseType: options.responseType || 'text',
-        timeout: options.timeout || 0,
         onload(resp) { resolve(resp); },
         onerror(err) {
           const e = new Error('网络请求失败（连不上 ' + url + '）' + (err && err.error ? ' - ' + err.error : ''));
@@ -266,7 +271,11 @@
           e.isNetworkError = true;
           reject(e);
         },
-      });
+      };
+      // 只在传入正数时才设 timeout：GM_xmlhttpRequest 会把 timeout:0 当成"0 毫秒=立即超时"，
+      // 而非"无超时"，会导致识别 POST 刚发出就被判超时。
+      if (options.timeout && options.timeout > 0) cfg.timeout = options.timeout;
+      GM_xmlhttpRequest(cfg);
     });
   }
 
@@ -478,7 +487,8 @@
     } catch (e) {
       if (e && e.isNetworkError) {
         setServiceWarning(true);
-        log('❌ 无法连接本地识别服务，请确认 service.py 已在 8123 端口运行');
+        log('❌ 识别请求失败: ' + (e.message || '未知网络错误'));
+        log('   提示: 若上方含 "not part of @connect" 请在油猴重新授权脚本；否则确认 service.py 在 8123 运行');
       } else {
         log('验证码识别异常: ' + (e && e.message ? e.message : String(e)));
       }
@@ -595,6 +605,25 @@
     }
   }
 
+  // 轮询服务状态：更新红条 + lastHealthOk，仅在状态变化时记一条日志（不刷屏）
+  async function pollServiceHealth() {
+    const ok = await checkServiceHealth();
+    setServiceWarning(!ok);
+    if (ok !== lastHealthOk) {
+      lastHealthOk = ok;
+      log(ok ? '识别服务已连接 ✓' : '⚠️ 识别服务未连接，请确认 service.py 已在 8123 端口运行');
+    }
+    return ok;
+  }
+
+  // 自适应节奏：正常 6s 一次（开销可忽略），断开时 2s 一次（开了 python 能快速恢复）
+  function scheduleHealthPoll() {
+    if (healthTimer) { clearTimeout(healthTimer); healthTimer = null; }
+    if (!isWatching) return;
+    const delay = lastHealthOk === false ? 2000 : 6000;
+    healthTimer = setTimeout(() => { pollServiceHealth().then(scheduleHealthPoll); }, delay);
+  }
+
   function updateStatus(text) {
     lastStatusText = text;
     refreshStatus();
@@ -645,6 +674,7 @@
   const DEFAULT_CONFIG = {
     targetPlan: 'Pro',
     billingCycle: 'quarter',
+    targetDate: '',        // 空 = 自动取"下一次"该时刻（今天没到则今天、过了则明天）
     targetHour: 10,
     targetMinute: 0,
     targetSecond: 0
@@ -658,6 +688,8 @@
   let hasCompleted = false; // 取代 hasClicked，只有出现真实支付框才设为true
   let targetTimestamp = 0;
   let countdownTimer = null;
+  let healthTimer = null;
+  let lastHealthOk = null;
   let lastCycleSwitchAt = 0;
   let lastStatusText = '';
   let lastRenderedStatusText = '';
@@ -674,10 +706,20 @@
     return {
       targetPlan: PRODUCT_MAP[raw.targetPlan] ? raw.targetPlan : DEFAULT_CONFIG.targetPlan,
       billingCycle: CYCLE_LABELS[raw.billingCycle] ? raw.billingCycle : DEFAULT_CONFIG.billingCycle,
+      targetDate: sanitizeDate(raw.targetDate),
       targetHour: clampNumber(raw.targetHour, 0, 23, DEFAULT_CONFIG.targetHour),
       targetMinute: clampNumber(raw.targetMinute, 0, 59, DEFAULT_CONFIG.targetMinute),
       targetSecond: clampNumber(raw.targetSecond, 0, 59, DEFAULT_CONFIG.targetSecond)
     };
+  }
+
+  // 校验 YYYY-MM-DD：格式不对或已是过去的日期则作废（返回 ''，回退到"下一次"逻辑）
+  function sanitizeDate(v) {
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return '';
+    const [y, mo, d] = v.split('-').map(Number);
+    const dt = new Date(y, mo - 1, d);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    return dt.getTime() >= today.getTime() ? v : '';
   }
 
   function loadConfig() {
@@ -710,14 +752,21 @@
     return String(text || '').replace(/\s+/g, '').trim();
   }
 
-  function getTargetDate(now = new Date()) {
+  function toDateStr(d) {
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  // 未显式指定日期时，取"下一次"该时刻所在日期：今天没到点用今天，已过(超宽限)用明天。
+  function nextOccurrenceDateStr(now = new Date()) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), config.targetHour, config.targetMinute, config.targetSecond || 0, 0);
-    // 今日目标时间已过且超出宽限窗口 → 自动顺延到明天，方便提前一晚挂机抢次日。
-    // 仍在宽限窗口内则保留今天（startWatching 会立即进入抢购重试，支持"晚到也能补抢"）。
-    if (now.getTime() > d.getTime() + WATCH_GRACE_MS) {
-      d.setDate(d.getDate() + 1);
-    }
-    return d;
+    if (now.getTime() > d.getTime() + WATCH_GRACE_MS) d.setDate(d.getDate() + 1);
+    return toDateStr(d);
+  }
+
+  function getTargetDate(now = new Date()) {
+    const dateStr = config.targetDate || nextOccurrenceDateStr(now);
+    const [y, mo, d] = dateStr.split('-').map(Number);
+    return new Date(y, mo - 1, d, config.targetHour, config.targetMinute, config.targetSecond || 0, 0);
   }
 
   function refreshTargetTimestamp() { targetTimestamp = getTargetDate().getTime(); }
@@ -852,7 +901,13 @@
       clock.textContent = `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
     }
     if (sub) {
-      const dayLabel = isSameDay(new Date(targetMs), new Date(now)) ? '今天' : '明天';
+      const t = new Date(targetMs);
+      const nowD = new Date(now);
+      const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+      let dayLabel;
+      if (isSameDay(t, nowD)) dayLabel = '今天';
+      else if (isSameDay(t, tomorrow)) dayLabel = '明天';
+      else dayLabel = `${t.getMonth() + 1}/${t.getDate()}`;
       sub.textContent = `目标 ${dayLabel} ${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
     }
   }
@@ -891,6 +946,12 @@
     // ---------- 1. 处理验证码等待期 ----------
     if (isWaitingCaptcha) {
       if (isCaptchaVisible()) {
+        // 服务未连接：保持验证码开着，等 python 起来再识别（不关闭，避免空耗）
+        if (lastHealthOk === false) {
+          updateStatus('⏸ 验证码已弹出，等待识别服务…');
+          scheduleNextTick(800);
+          return;
+        }
         updateStatus('正在自动识别验证码...');
         const solved = await solveCaptchaViaOCR();
         if (solved) {
@@ -969,6 +1030,13 @@
     // 如果还没到设定的抢购绝对时间，则继续等待
     if (Date.now() < targetTimestamp) { scheduleNextTick(); return; }
 
+    // 服务未连接：先不点购买（避免弹出无法识别的验证码、空耗重试次数），等服务就绪
+    if (lastHealthOk === false) {
+      updateStatus('⏸ 已到点，等待识别服务启动…');
+      scheduleNextTick(500);
+      return;
+    }
+
     const card = findPlanCard(config.targetPlan);
     const button = findBuyButton(card);
 
@@ -993,6 +1061,9 @@
   function stopWatching(options = {}) {
     const { statusText = '已停止', logMessage = '已停止' } = options;
     if (tickTimer) { clearTimeout(tickTimer); tickTimer = null; }
+    if (healthTimer) { clearTimeout(healthTimer); healthTimer = null; }
+    lastHealthOk = null;
+    setServiceWarning(false);
     isWatching = false;
     if (logMessage) log(logMessage);
     updateStatus(statusText);
@@ -1015,18 +1086,15 @@
     retryCount = 0;
 
     const ts = `${config.targetHour}:${String(config.targetMinute).padStart(2, '0')}:${String(config.targetSecond || 0).padStart(2, '0')}`;
-    log(`开始闭环监听，目标时间: ${ts}`);
+    log(`开始监听，目标时间: ${ts}`);
     updateStatus(getIdleStatusText());
     refreshControls();
     renderCountdown();
     scheduleNextTick(0);
 
-    // 开抢前预检本地识别服务，未启动则红条提示（不阻断监听，购买点击不依赖该服务）
-    checkServiceHealth().then(ok => {
-      setServiceWarning(!ok);
-      if (!ok) log('⚠️ 本地识别服务未连接（8123），请先运行 service.py，否则验证码无法自动识别');
-      else log('识别服务已连接 ✓');
-    });
+    // 预检本地识别服务并持续轮询：中途开/关 python 都会自动更新红条与门控状态
+    lastHealthOk = null;
+    pollServiceHealth().then(scheduleHealthPoll);
   }
 
   function resetClicked() {
@@ -1064,7 +1132,7 @@
     s.textContent = `
       #glm-simple-panel-v16{position:fixed;left:20px;bottom:20px;width:288px;z-index:999999;border-radius:16px;overflow:hidden;background:#fff;border:1px solid #e6e8ef;box-shadow:0 18px 50px -20px rgba(30,41,59,.45);font-family:"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;color:#1e293b;font-size:13px}
       #glm-simple-panel-v16 *{box-sizing:border-box}
-      #glm-simple-panel-v16 .glm-head{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff}
+      #glm-simple-panel-v16 .glm-head{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;cursor:move;user-select:none}
       #glm-simple-panel-v16 .glm-head-left{display:flex;align-items:center;gap:8px}
       #glm-simple-panel-v16 .glm-title{font-size:14px;font-weight:700;letter-spacing:.3px}
       #glm-simple-panel-v16 .glm-badge{font-size:10px;font-weight:600;background:rgba(255,255,255,.22);padding:1px 6px;border-radius:8px}
@@ -1072,8 +1140,10 @@
       #glm-simple-panel-v16 .glm-dot[data-state="running"]{background:#22c55e;animation:glmPulse 1.4s infinite}
       #glm-simple-panel-v16 .glm-dot[data-state="done"]{background:#fbbf24}
       @keyframes glmPulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
-      #glm-simple-panel-v16 .glm-collapse{border:none;background:rgba(255,255,255,.18);color:#fff;width:22px;height:22px;border-radius:7px;cursor:pointer;font-size:16px;line-height:1;font-weight:700;display:flex;align-items:center;justify-content:center}
-      #glm-simple-panel-v16 .glm-collapse:hover{background:rgba(255,255,255,.34)}
+      #glm-simple-panel-v16 .glm-head-btns{display:flex;gap:6px}
+      #glm-simple-panel-v16 .glm-iconbtn{border:none;background:rgba(255,255,255,.18);color:#fff;width:22px;height:22px;border-radius:7px;cursor:pointer;font-size:16px;line-height:1;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0}
+      #glm-simple-panel-v16 .glm-iconbtn:hover{background:rgba(255,255,255,.34)}
+      #glm-simple-panel-v16 .glm-iconbtn.glm-close:hover{background:#ef4444}
       #glm-simple-panel-v16 .glm-body{padding:14px}
       #glm-simple-panel-v16 .glm-clock-wrap{text-align:center;padding:12px 8px;margin-bottom:12px;background:#f1f5ff;border:1px solid #e0e7ff;border-radius:12px}
       #glm-simple-panel-v16 .glm-clock{font-size:30px;font-weight:800;letter-spacing:1px;color:#4338ca;font-variant-numeric:tabular-nums;font-family:"SF Mono",Consolas,"Courier New",monospace}
@@ -1108,13 +1178,16 @@
     const panel = document.createElement('div');
     panel.id = 'glm-simple-panel-v16';
     panel.innerHTML = `
-      <div class="glm-head">
+      <div class="glm-head" id="glm-simple-head-v16">
         <div class="glm-head-left">
           <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
           <span class="glm-title">GLM 抢购助手</span>
           <span class="glm-badge">v1.6</span>
         </div>
-        <button class="glm-collapse" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
+        <div class="glm-head-btns">
+          <button class="glm-iconbtn" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
+          <button class="glm-iconbtn glm-close" id="glm-simple-close-v16" type="button" title="关闭面板">×</button>
+        </div>
       </div>
       <div class="glm-body" id="glm-simple-body-v16">
         <div class="glm-clock-wrap">
@@ -1129,8 +1202,8 @@
             <select id="glm-simple-cycle-v16"><option value="month">连续包月</option><option value="quarter">连续包季</option><option value="year">连续包年</option></select>
           </label>
         </div>
-        <label class="glm-fld glm-fld-time"><span>抢购时间（时:分:秒）</span>
-          <input id="glm-simple-time-v16" type="time" step="1">
+        <label class="glm-fld glm-fld-time"><span>抢购时间（日期 时:分:秒）</span>
+          <input id="glm-simple-datetime-v16" type="datetime-local" step="1">
         </label>
         <div class="glm-status" id="glm-simple-status-v16" data-state="idle">就绪</div>
         <div class="glm-warn" id="glm-simple-warn-v16" style="display:none">⚠️ 识别服务未连接，请先运行 service.py（端口 8123）</div>
@@ -1141,20 +1214,24 @@
 
     const planEl = document.getElementById('glm-simple-plan-v16');
     const cycleEl = document.getElementById('glm-simple-cycle-v16');
-    const timeEl = document.getElementById('glm-simple-time-v16');
+    const dtEl = document.getElementById('glm-simple-datetime-v16');
+
+    const dtValue = () => `${config.targetDate || nextOccurrenceDateStr()}T${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
 
     planEl.value = config.targetPlan;
     cycleEl.value = config.billingCycle;
-    timeEl.value = `${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
+    dtEl.value = dtValue();
 
     planEl.addEventListener('change', () => { config.targetPlan = planEl.value; handleConfigChange(); renderCountdown(); });
     cycleEl.addEventListener('change', () => { config.billingCycle = cycleEl.value; handleConfigChange(); });
-    timeEl.addEventListener('change', () => {
-      const parts = String(timeEl.value || '').split(':').map(Number);
-      config.targetHour = clampNumber(parts[0], 0, 23, config.targetHour);
-      config.targetMinute = clampNumber(parts[1], 0, 59, config.targetMinute);
-      config.targetSecond = clampNumber(parts[2], 0, 59, 0);
-      timeEl.value = `${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond)}`;
+    dtEl.addEventListener('change', () => {
+      const [datePart, timePart] = String(dtEl.value || '').split('T');
+      config.targetDate = sanitizeDate(datePart);          // 过期/非法日期作废 → 回退"下一次"
+      const tp = String(timePart || '').split(':').map(Number);
+      config.targetHour = clampNumber(tp[0], 0, 23, config.targetHour);
+      config.targetMinute = clampNumber(tp[1], 0, 59, config.targetMinute);
+      config.targetSecond = clampNumber(tp[2], 0, 59, 0);
+      dtEl.value = dtValue();                               // 回填规范化后的值
       handleConfigChange();
       renderCountdown();
     });
@@ -1171,8 +1248,45 @@
       btn.textContent = collapsed ? '–' : '+';
     });
 
+    // 关闭面板（停止监听 + 移除 UI，刷新页面可恢复）
+    document.getElementById('glm-simple-close-v16').addEventListener('click', () => {
+      if (isWatching) stopWatching({ statusText: '已停止', logMessage: '面板关闭，已停止监听' });
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      panel.remove();
+    });
+
+    // 标题栏拖动面板
+    makePanelDraggable(panel, document.getElementById('glm-simple-head-v16'));
+
     refreshControls();
     renderCountdown();
+  }
+
+  // 拖动：按住标题栏移动面板（点按钮不触发），位置限制在视口内
+  function makePanelDraggable(panel, handle) {
+    if (!handle) return;
+    let dragging = false, startX = 0, startY = 0, originX = 0, originY = 0;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return;
+      const rect = panel.getBoundingClientRect();
+      panel.style.left = rect.left + 'px';
+      panel.style.top = rect.top + 'px';
+      panel.style.bottom = 'auto';
+      dragging = true;
+      startX = e.clientX; startY = e.clientY;
+      originX = rect.left; originY = rect.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const maxX = window.innerWidth - panel.offsetWidth;
+      const maxY = window.innerHeight - 40;
+      const nx = Math.max(0, Math.min(maxX, originX + (e.clientX - startX)));
+      const ny = Math.max(0, Math.min(maxY, originY + (e.clientY - startY)));
+      panel.style.left = nx + 'px';
+      panel.style.top = ny + 'px';
+    });
+    document.addEventListener('mouseup', () => { dragging = false; });
   }
 
   function bootstrap() {
@@ -1180,7 +1294,7 @@
     buildPanel();
     if (!countdownTimer) countdownTimer = setInterval(renderCountdown, 500);
     updateStatus('准备就绪');
-    log('脚本引擎加载完毕 v1.6 (闭环重组)');
+    log('脚本已加载 v1.6');
   }
 
   if (document.readyState === 'loading') {
