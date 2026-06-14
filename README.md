@@ -1,97 +1,79 @@
 # GLM Coding 自动抢购助手
 
-基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 验证码识别系统，通过油猴脚本实现 GLM Coding 套餐准点自动抢购，支持点选验证码自动识别。支持Windows/Linux/MacOS等多系统。
+GLM Coding 套餐准点自动抢购，自动识别腾讯点选验证码。验证码识别在本地完成，不上传第三方。支持 Windows、Linux、macOS。
 
-[拼好模打9.5折](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)
+[拼好模 9.5 折链接](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)
 
-## 预备姿势
-- 使用拼好模链接优惠
-- 提前充值金额
-- 提前10~20min进入网址
+## 抢购前准备
 
+- 用拼好模链接进入，享折扣
+- 提前给账户充好钱
+- 提前 10~20 分钟打开页面
 
-## 功能
+## 环境准备
 
-- 准点自动点击指定套餐购买按钮
-- 绕过限流拦截与售罄状态
-- 腾讯点选验证码自动识别（YOLO + 孪生网络，全程本地、不上传第三方；方式一进程内完成，方式二走 `service.py`）
-- 弹窗自动检测与重试闭环
-- 可视化控制面板（套餐/周期/时间配置，方式二油猴版）
+两种用法都需要：
 
-## 两种用法，先选一种
+1. 安装 Python 3.8 以上。到 [python.org](https://www.python.org/downloads/) 下载，安装时勾选 “Add Python to PATH”。
+2. 安装 Google Chrome。
 
-| | 方式一 · Playwright 全自动（推荐） | 方式二 · 油猴脚本 |
-|---|---|---|
-| 体验 | 启动后**真·全自动**，无需油猴、无需粘贴脚本 | 有可视化面板，但**必须手动把 `glm.js` 粘进 Tampermonkey**，并另起识别服务 |
-| 适合 | 怕麻烦、想一条命令搞定 | 喜欢浏览器面板、已习惯油猴 |
-| 验证码识别 | 脚本进程内完成 | 需单独起 `service.py` |
+## 选哪种用法
 
-> ⚠️ **关于「一键脚本」的常见误解**：`start.cmd` / `start.sh` 只负责帮你**装依赖、起 Python 进程**。选方式二（油猴）时，它仅仅是把**验证码识别服务**跑起来——`glm.js` 这个油猴脚本**仍然要你亲手粘进 Tampermonkey**，一键脚本不会替你做这步。
+- 方式一（Playwright）：一条命令启动，全程自动，不用装油猴。新手推荐。
+- 方式二（油猴脚本）：浏览器里有可视化面板，但要手动把脚本粘进油猴扩展，并单独开一个识别服务。
 
-## 准备工作（两种方式都要）
+按需看下面对应的一节即可。
 
-1. **安装 Python 3.8+**：到 [python.org](https://www.python.org/downloads/) 下载，安装时**务必勾选 “Add Python to PATH”**（新手最常漏的一步）。
-2. **安装 Google Chrome**：方式一会调用系统已装的 Chrome（`channel="chrome"`，无需 `playwright install`）。
+## 方式一：Playwright
 
-> 依赖安装和进程启动都可交给**一键脚本**：Windows 双击 [`start.cmd`](start.cmd)，Linux/macOS 运行 `chmod +x start.sh && ./start.sh`。它会自动**建 `.venv` 虚拟环境 → 装依赖 → 让你选 `1`/`2` 启动**（`1`=方式一，`2`=方式二的识别服务）。首次较慢，之后很快；依赖只装在项目内的 `.venv`，不污染系统 Python。
->
-> （`start.cmd` 菜单是英文：`cmd.exe` 无法可靠解析含中文的批处理文件，会乱码、切断命令，故 Windows 版只用英文；`start.sh` 不受此限，用的中文。）
+启动，任选一种：
 
----
+- 一键：Windows 双击 `start.cmd`；Linux、macOS 运行 `./start.sh`。然后输入 `1`。
+- 命令行：先 `pip install -r requirements.txt`，再 `python glm.py`。
 
-## 方式一：Playwright 全自动（推荐）
+一键脚本会自动建虚拟环境、装依赖，再让你输入 `1` 或 `2` 选择启动（菜单是英文，`1` 对应方式一，`2` 对应方式二的识别服务）。
 
-**启动**（任选其一）：
+启动后：
 
-- 一键：双击 [`start.cmd`](start.cmd)（Win）/ 运行 `./start.sh`（Linux/macOS）→ 选 **1**
-- 手动：`pip install -r requirements.txt` 后 `python glm.py`
+1. 弹出一个独立的 Chrome 窗口并打开抢购页（用项目里的 `.chrome-profile`，和你平时的 Chrome 不冲突，也不用关掉平时的 Chrome）。
+2. 没登录时网页会自动弹登录框，在这个窗口里用手机号加验证码登录即可，脚本会自动检测登录完成。登录状态会记住，下次免登录。
+3. 倒计时到点后自动选周期、点购买，遇到验证码自动识别并点选。
+4. 抢到后停止点击，停在支付弹窗，你扫码付款即可。
 
-**配置**：抢购参数（套餐 / 周期 / 时间）改 [glm.py](glm.py) 顶部的 `CONFIG`。
+抢什么套餐、什么时间，改 [glm.py](glm.py) 顶部的 `CONFIG`，见下方配置说明。
 
-**运行流程**：
-
-1. 自动打开一个**专用配置的 Chrome 窗口**（项目目录下的 `.chrome-profile`，与你日常 Chrome 互不干扰，**无需关闭日常 Chrome**），并跳转到 glm-coding 抢购页
-2. 未登录时网站会自动弹出登录框 → 在该窗口内用手机号+验证码登录（**无需回到终端按键**，脚本自动检测登录完成后继续；登录态保存在 `.chrome-profile`，下次免登录）
-3. 进入倒计时 → 到点自动选周期、点购买 → 遇腾讯点选验证码自动识别并点选提交
-4. 抢到后自动停止点击、保持浏览器停在支付弹窗，你可从容扫码支付（其间脚本不再点击，不会把支付窗口点没）
-5. 退出见下方「[退出 / 停止](#退出--停止)」
-
-> 时间规则：抢购只认 `CONFIG` 里的**时分秒**。当天目标时刻起 **40 分钟内**打开都抢**当天**（已过点则立即开抢，正好赶回流）；**超过 40 分钟**（如默认 10:00 → 10:40 之后）才打开则自动滚到**明天**同一时刻。油猴版同此规则。
-
----
+时间规则：脚本只看 `CONFIG` 里的时分秒。当天目标时刻起 40 分钟内打开，抢当天（已过点就立即开抢，正好赶回流）；超过 40 分钟才打开，自动改抢明天同一时刻。
 
 ## 方式二：油猴脚本
 
-> 油猴（[Tampermonkey](https://www.tampermonkey.net/)）是个浏览器扩展，能在指定网页上自动运行你装进去的「用户脚本」。本项目的 [glm.js](glm.js) 就是这样一个脚本——**它不会被一键脚本自动安装，得你手动粘进油猴**。
+油猴（Tampermonkey）是浏览器扩展，能在指定网页自动运行你装进去的脚本。本项目的 [glm.js](glm.js) 需要你手动粘进去，一键脚本不会帮你装。
 
-### 第 1 步 · 起验证码识别服务（保持开着）
+第 1 步，开识别服务（保持开着）：
 
-- 一键：双击 [`start.cmd`](start.cmd) / 运行 `./start.sh` → 选 **2**
-- 手动：`pip install -r requirements.txt` 后 `python service.py`
+- 一键：双击 `start.cmd`，或运行 `./start.sh`，然后输入 `2`。
+- 命令行：先 `pip install -r requirements.txt`，再 `python service.py`。
 
-服务跑在 `http://127.0.0.1:8123`，**抢购期间这个窗口别关**（关了就识别不了验证码）。
+服务地址是 `http://127.0.0.1:8123`。抢购期间别关这个窗口，关了就识别不了验证码。
 
-### 第 2 步 · 把 glm.js 装进油猴（必须手动）
+第 2 步，把脚本装进油猴：
 
 1. 浏览器装 [Tampermonkey](https://www.tampermonkey.net/) 扩展。
-2. 点扩展图标 →「**管理面板 / Dashboard**」→ 顶部「**＋**」新建脚本。
-3. 把编辑器里的模板**全选删除**，打开本仓库的 [glm.js](glm.js)，**全文复制粘贴**进去。
-4. 按 **Ctrl+S** 保存。脚本头部带 `@match`，会自动绑定到 glm-coding 页面。
-5. 脚本有更新时（如版本号变了），重复 3–4 把新内容覆盖粘贴进同一个脚本即可。
+2. 点扩展图标，进管理面板，点顶部的「+」新建脚本。
+3. 把编辑器里的模板全选删掉，打开 [glm.js](glm.js)，把全文复制粘贴进去。
+4. 按 Ctrl+S 保存。
+5. 以后脚本有更新，重复第 3、4 步覆盖粘贴即可。
 
-### 第 3 步 · 开抢
+第 3 步，开抢：
 
-1. 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)，左下角自动出现控制面板。
-2. 面板里配置套餐 / 周期 / 时间。
-3. 点「**▶ 开始监听**」。到点自动抢，想停手点「**■ 停止监听**」。
+1. 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)，左下角会出现面板。
+2. 在面板里选套餐、周期、时间。
+3. 点「开始监听」。到点自动抢，想停手点「停止监听」。
 
-## 退出 / 停止
+## 怎么退出
 
-| 你在用 | 怎么停 |
-|--------|--------|
-| **验证码识别服务**（`start.cmd` 选 2 / `python service.py`） | 在那个终端窗口按 **Ctrl+C** 停服务（uvicorn 会提示 `Press CTRL+C to quit`）；一键脚本启动的会停在「按任意键继续」，再按一下关窗口。也可直接关窗口。**抢购没结束别关**——关了油猴就识别不了验证码。 |
-| **油猴脚本**（glm.js） | 点面板「**■ 停止监听**」即停手；想彻底不用就关闭/刷新页面，或在 Tampermonkey 里禁用该脚本。脚本在「抢到（弹支付框）/ 超过 40 分钟窗口 / 点击超 300 次」时也会**自动停**。 |
-| **Playwright**（`start.cmd` 选 1 / `python glm.py`） | 抢到或达上限后脚本会**挂起、保持浏览器开着**让你扫码：扫完后**关闭浏览器窗口**或按 **Ctrl+C** 退出。运行中想中止也按 **Ctrl+C**。⚠️ `Ctrl+C` 会连脚本启动的这个浏览器一起关掉（终端信号会发给 Chrome 子进程，无法避免），所以**务必扫完码再退**。 |
+- 识别服务（service.py）：在它的终端窗口按 Ctrl+C，或直接关窗口。抢购没结束别关。
+- 油猴脚本：点面板「停止监听」，或关掉、刷新页面。抢到、超过 40 分钟、点击太多次时也会自动停。
+- Playwright（glm.py）：抢到后脚本会停在支付页、保持浏览器开着，扫完码再关窗口或按 Ctrl+C。注意按 Ctrl+C 会顺手把这个浏览器一起关掉，所以扫完码再退。
 
 ## 配置说明
 
@@ -105,46 +87,41 @@
 
 ## 相比原项目新增功能
 
-基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 原项目的验证码识别能力，本项目新增以下功能：
+基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 的验证码识别能力，本项目新增：
 
-### 油猴脚本自动抢购 ([glm.js](glm.js))
+油猴脚本 [glm.js](glm.js)：
 
-- **网络拦截层**：绕过限流接口检查、篡改售罄/库存数据、拦截限流页面跳转
-- **验证码图片拦截**：重写 Image 构造函数与 createElement，自动捕获腾讯验证码图片并缓存 base64
-- **验证码自动识别**：通过 `GM_xmlhttpRequest` 调用本地识别 API，自动点击目标并提交
-- **弹窗自动处理**：检测「购买人数较多」/无价格弹窗自动关闭重试，检测真实支付弹窗自动停止
-- **闭环重试机制**：倒计时 → 自动点击购买 → 弹窗检测 → 验证码处理 → 重新点击，直到出现支付窗口
-- **可视化控制面板**：页面左下角悬浮面板，可配置套餐、周期、目标时间，实时显示状态与日志
+- 绕过限流接口、改写售罄/库存数据、拦截限流页面跳转
+- 自动捕获腾讯验证码图片并缓存
+- 调用本地识别接口，自动点选并提交
+- 自动处理「购买人数较多」、无价格等弹窗，检测到真实支付弹窗后停止
+- 倒计时、点购买、弹窗检测、验证码处理的闭环重试
+- 左下角可视化面板，配置套餐、周期、时间，实时显示状态
 
-### Python 抢购脚本 ([glm.py](glm.py))
+Python 脚本 [glm.py](glm.py)：
 
-- 基于 Playwright 的浏览器自动化方案，全程无人值守
-- 验证码识别在进程内完成，无需单独启动 `service.py`
-- 专用 `.chrome-profile` 配置目录，免关闭日常 Chrome；登录态持久化，下次免登录
-- 自动检测登录状态，登录完成后自动继续，无需终端交互
-- 定点改写售罄数据（`/api/biz/pay/preview`）+ 绕过限流，与油猴版一致
-- 支付弹窗按「可见性」判定，避免隐藏残留节点造成误报停机
-- 定时倒计时 + 自动选周期 + JS 点击购买 + 腾讯验证码自动识别点选
-- 抢到后自动停止点击并保持浏览器打开，方便从容扫码支付
+- 基于 Playwright，全程无人值守
+- 验证码识别在进程内完成，不用单独开 service.py
+- 专用 `.chrome-profile`，不影响平时的 Chrome，登录状态可复用
+- 自动检测登录，登录后自动继续
+- 改写售罄数据、绕过限流，与油猴版一致
+- 支付弹窗按可见性判定，避免隐藏节点误报停机
+- 抢到后停止点击并保持浏览器打开，方便扫码
 
-### 识别服务 API 增强
+识别服务 API：
 
-- 新增 `clickText` 参数：接收验证码提示文字（如「豹 雹 澄」），辅助排序匹配
-- 新增 `dataType=2`：支持直接传入图片 base64 编码，无需公网 URL
-- `aiohttp` 异步下载：服务端通过异步 HTTP 获取远程图片，降低响应延迟
+- 新增 `clickText` 参数，接收验证码提示文字辅助排序
+- 新增 `dataType=2`，支持直接传图片 base64
+- 用 aiohttp 异步下载远程图片，降低延迟
 
-## 验证码识别服务
-
-油猴脚本依赖本地验证码识别 API（`http://127.0.0.1:8123/api/v1/identify`），需先启动 `service.py`。识别系统基于 YOLO + 孪生网络，详细技术架构、训练方案与部署配置请参阅：
-
-[README_TEXT_SELECT.md](README_TEXT_SELECT.md)
+识别系统的技术细节见 [README_TEXT_SELECT.md](README_TEXT_SELECT.md)。
 
 ## 致谢
 
 - 验证码识别核心：[MgArcher/Text_select_captcha](https://github.com/MgArcher/Text_select_captcha)
-- 核心油猴脚本
-    - linux.do社区 @ballen 开源的原始脚本 原帖 https://linux.do/t/topic/1954655
-    - linux.do社区 @xcd-jjj111 的升级脚本 原帖 https://linux.do/t/topic/2191688 Github链接 https://github.com/lyingflatDDD/grab-GLM-coding-plan
+- 核心油猴脚本：
+    - linux.do 社区 @ballen 的原始脚本，原帖 https://linux.do/t/topic/1954655
+    - linux.do 社区 @xcd-jjj111 的升级脚本，原帖 https://linux.do/t/topic/2191688 ，GitHub https://github.com/lyingflatDDD/grab-GLM-coding-plan
 
 ## 免责声明
 
