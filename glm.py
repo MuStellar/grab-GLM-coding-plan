@@ -21,8 +21,8 @@ CAPTCHA_WRAPPER_ID = "tcaptcha_transform_dy"
 CONFIG = {
     "target_plan": "Lite",      # Lite / Pro / Max
     "billing_cycle": "month",   # month / quarter / year
-    "target_hour": 10,          # 每天早上 10:00 放库存
-    "target_minute": 0,
+    "target_hour": 2,          # 每天早上 10:00 放库存
+    "target_minute": 9,
     "target_second": 0,
 }
 
@@ -57,30 +57,38 @@ def init(page):
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
     }''')
 
-    # 拦截限流接口（与 JS 版一致）
-    page.route('**/api/biz/rate-limit/check**', lambda route: route.fulfill(
-        status=200,
-        content_type='application/json',
-        body='{"code":0,"msg":"success","data":null,"success":true}'
-    ))
-
-    # 定点改写售罄数据（与 JS 版一致）：把 isSoldOut/disabled/soldOut/stock 改成可购买
-    def _rewrite_sold_out(route):
+    # 拦截所有 /api/ 响应，按内容改写售罄数据（与油猴版一致）。
+    # 油猴是拦截全部 JSON；之前 glm.py 只盯 pay/preview，漏掉了卡片“暂时售罄”
+    # 那条接口，导致按钮一直是死的售罄态。这里改成只要响应里带售罄字段就改。
+    def _handle_api(route):
+        # 限流检查：直接返回成功，放行抢购
+        if 'rate-limit/check' in route.request.url:
+            route.fulfill(status=200, content_type='application/json',
+                          body='{"code":0,"msg":"success","data":null,"success":true}')
+            return
+        resp = None
         try:
             resp = route.fetch()
             body = resp.text()
             if ('"isSoldOut":true' in body or '"disabled":true' in body
-                    or '"soldOut":true' in body):
+                    or '"soldOut":true' in body or '"stock":0' in body):
                 body = (body.replace('"isSoldOut":true', '"isSoldOut":false')
                             .replace('"disabled":true', '"disabled":false')
                             .replace('"soldOut":true', '"soldOut":false')
                             .replace('"stock":0', '"stock":999'))
             route.fulfill(response=resp, body=body)
         except Exception as e:
-            print(f"售罄改写失败，放行原响应: {e}")
-            route.continue_()
+            print(f"接口改写失败，放行原响应: {e}")
+            # 已拿到响应就原样回，避免 continue_ 重发请求（防止重复下单）
+            if resp is not None:
+                try:
+                    route.fulfill(response=resp)
+                except Exception:
+                    pass
+            else:
+                route.continue_()
 
-    page.route('**/api/biz/pay/preview**', _rewrite_sold_out)
+    page.route('**/api/**', _handle_api)
 
 
 def _extract_captcha_info(page):
