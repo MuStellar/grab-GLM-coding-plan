@@ -1,6 +1,6 @@
 # GLM Coding 自动抢购助手
 
-基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 验证码识别系统，通过油猴脚本实现 GLM Coding 套餐准点自动抢购，支持点选验证码自动识别。
+基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 验证码识别系统，通过油猴脚本实现 GLM Coding 套餐准点自动抢购，支持点选验证码自动识别。支持Windows/Linux/MacOS等多系统。
 
 [拼好模打9.5折](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)
 
@@ -14,9 +14,9 @@
 
 - 准点自动点击指定套餐购买按钮
 - 绕过限流拦截与售罄状态
-- 腾讯点选验证码自动识别（调用本地识别服务）
+- 腾讯点选验证码自动识别（YOLO + 孪生网络，全程本地、不上传第三方；方式一进程内完成，方式二走 `service.py`）
 - 弹窗自动检测与重试闭环
-- 可视化控制面板（套餐/周期/时间配置）
+- 可视化控制面板（套餐/周期/时间配置，方式二油猴版）
 
 ## 两种用法，先选一种
 
@@ -92,21 +92,6 @@
 | **验证码识别服务**（`start.cmd` 选 2 / `python service.py`） | 在那个终端窗口按 **Ctrl+C** 停服务（uvicorn 会提示 `Press CTRL+C to quit`）；一键脚本启动的会停在「按任意键继续」，再按一下关窗口。也可直接关窗口。**抢购没结束别关**——关了油猴就识别不了验证码。 |
 | **油猴脚本**（glm.js） | 点面板「**■ 停止监听**」即停手；想彻底不用就关闭/刷新页面，或在 Tampermonkey 里禁用该脚本。脚本在「抢到（弹支付框）/ 超过 40 分钟窗口 / 点击超 300 次」时也会**自动停**。 |
 | **Playwright**（`start.cmd` 选 1 / `python glm.py`） | 抢到或达上限后脚本会**挂起、保持浏览器开着**让你扫码：扫完后**关闭浏览器窗口**或按 **Ctrl+C** 退出。运行中想中止也按 **Ctrl+C**。⚠️ `Ctrl+C` 会连脚本启动的这个浏览器一起关掉（终端信号会发给 Chrome 子进程，无法避免），所以**务必扫完码再退**。 |
-
-## 跨平台说明（Windows / Linux / macOS）
-
-代码不写死任何单一系统：文件路径用 `os.path` 拼接、Chrome 用 Playwright 的 `channel="chrome"` 按系统自动定位、CJK 字体在 [src/captcha.py](src/captcha.py) 里准备了三大系统的候选路径（找不到会明确报错而非静默渲染失败）。
-
-仓库带了一个 [跨平台冒烟测试](.github/workflows/smoke.yml)（GitHub Actions），在 Ubuntu / macOS / Windows × Python 3.10/3.12 上自动验证：依赖可安装、模块可导入、关键路径与中文字体在各系统都能解析。想本地自测某个系统，最省事的是用 Docker 跑 Linux：
-
-```bash
-docker run --rm -it -v "${PWD}:/app" -w /app python:3.12 bash -lc \
-  "apt-get update && apt-get install -y fonts-noto-cjk && pip install -r requirements.txt && \
-   python -m py_compile glm.py service.py && \
-   python -c 'from src.captcha import _load_cjk_font; _load_cjk_font(40); print(\"ok\")'"
-```
-
-macOS 没有官方容器，需在真机或 CI（如上面的 Actions）上验证。
 
 ## 配置说明
 
