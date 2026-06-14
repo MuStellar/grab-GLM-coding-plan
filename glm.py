@@ -14,13 +14,14 @@ from src import captcha
 
 cap = captcha.TextSelectCaptcha()
 URL = "https://bigmodel.cn/glm-coding"
+CAPTCHA_WRAPPER_ID = "tcaptcha_transform_dy"
 
 # 抢购配置
 CONFIG = {
     "target_plan": "Pro",       # Lite / Pro / Max
     "billing_cycle": "quarter", # month / quarter / year
-    "target_hour": 10,
-    "target_minute": 0,
+    "target_hour": 15,
+    "target_minute": 17,
     "target_second": 0,
 }
 
@@ -48,26 +49,70 @@ def init(page):
         body='{"code":0,"msg":"success","data":null,"success":true}'
     ))
 
-    # 拦截售罄数据
-    def handle_response(response):
-        if response.status != 200:
-            return
-        ct = response.headers.get('content-type', '')
-        if 'application/json' not in ct:
-            return
-        try:
-            body = response.text()
-            if any(k in body for k in ['"isSoldOut":true', '"disabled":true', '"soldOut":true']):
-                body \
-                    .replace('"isSoldOut":true', '"isSoldOut":false') \
-                    .replace('"disabled":true', '"disabled":false') \
-                    .replace('"soldOut":true', '"soldOut":false') \
-                    .replace('"stock":0', '"stock":999')
-                print("[拦截] 售罄数据已篡改")
-        except Exception:
-            pass
 
-    page.on('response', handle_response)
+def _extract_captcha_info(page):
+    """在页面里一次性提取识别所需信息：题面文字、背景图 URL、点击坐标基准框。
+    与油猴版 solveCaptchaViaOCR 的 DOM 逻辑一致：现在腾讯点选的主图是
+    div 背景图（.tencent-captcha-dy__verify-bg-img），不是 <img>，题面是纯文本。"""
+    return page.evaluate('''() => {
+        const wrapper = document.getElementById('tcaptcha_transform_dy');
+        if (!wrapper) return null;
+
+        // 题面文字：请依次点击：X Y Z  ->  取冒号后的部分
+        let clickText = null;
+        const headerText = wrapper.querySelector('.tencent-captcha-dy__header-text');
+        if (headerText) {
+            const m = headerText.textContent.match(/[：:]\\s*(.+)$/);
+            if (m) clickText = m[1].trim();
+        }
+
+        const imageArea = wrapper.querySelector('.tencent-captcha-dy__image-area');
+
+        // 背景大图：优先 div 背景图，其次兜底真正的 <img>
+        let imgUrl = null, target = null;
+        const bgDiv = (imageArea || wrapper).querySelector('.tencent-captcha-dy__verify-bg-img')
+                   || (imageArea || wrapper).querySelector('div[style*="background"]');
+        if (bgDiv) {
+            const m = (bgDiv.getAttribute('style') || '').match(/url\\(["']?(.+?)["']?\\)/);
+            if (m) { imgUrl = m[1]; target = bgDiv; }
+        }
+        if (!imgUrl) {
+            for (const img of wrapper.querySelectorAll('img')) {
+                if (img.src && !img.src.startsWith('data:') &&
+                    (img.src.includes('captcha') || img.naturalWidth > 100)) {
+                    imgUrl = img.src; target = img; break;
+                }
+            }
+        }
+        if (!imgUrl || !target) return { clickText: clickText, imgUrl: null };
+
+        const r = target.getBoundingClientRect();
+        return { clickText: clickText, imgUrl: imgUrl,
+                 box: { x: r.left, y: r.top, width: r.width, height: r.height } };
+    }''')
+
+
+def _find_confirm_point(page):
+    """定位验证码确认按钮的中心坐标（按钮可能是 div，用坐标点击最稳）。"""
+    return page.evaluate('''() => {
+        const wrapper = document.getElementById('tcaptcha_transform_dy');
+        if (!wrapper) return null;
+        let el = wrapper.querySelector(
+            'a.tcaptcha-verify-btn, button.tcaptcha-verify-btn, .tcaptcha-verify-btn, ' +
+            '.tcaptcha-operation-btn, .tencent-captcha-dy__verify-btn, ' +
+            '.tencent-captcha-dy__verify-confirm-btn, a[class*="verify-btn"], ' +
+            'button[class*="verify-btn"], div[class*="confirm-btn"]');
+        if (!el) {
+            for (const c of wrapper.querySelectorAll('a, button, div, [role="button"]')) {
+                const t = (c.textContent || '').trim();
+                if (t === '确认' || t === '确定' || t === '提交' || t === '验证') { el = c; break; }
+            }
+        }
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        if (r.width < 10 || r.height < 10) return null;
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }''')
 
 
 def handle_tencent_captcha(page):
@@ -76,91 +121,50 @@ def handle_tencent_captcha(page):
     返回: True 处理成功，False 失败
     """
     try:
-        # 腾讯验证码可能在 iframe 中
-        captcha_frame = None
-        try:
-            iframe_element = page.wait_for_selector(
-                'iframe[id*="tcaptcha"], iframe[src*="captcha"]', timeout=3000
-            )
-            if iframe_element:
-                captcha_frame = iframe_element.content_frame()
-        except Exception:
-            pass
-
-        # 在主页面或 iframe 中查找验证码图片
-        target = captcha_frame or page
-
-        # 等待验证码图片加载
-        img_element = target.wait_for_selector(
-            'img[src*="captcha"], img.tcaptcha-verify-img, .tcaptcha-bg-img img, '
-            'img[onclick], .tcaptcha-main-img img',
-            timeout=8000
-        )
-        if not img_element:
-            print("未找到验证码图片元素")
+        info = _extract_captcha_info(page)
+        if not info or not info.get("imgUrl"):
+            print("未找到验证码背景图")
             return False
 
-        # 获取图片 URL
-        img_url = img_element.get_attribute('src')
-        if not img_url:
-            print("未获取到验证码图片 URL")
-            return False
-        print(f"验证码图片 URL: {img_url[:80]}...")
+        click_text = info.get("clickText")
+        if click_text:
+            print(f"题面文字: {click_text}")
 
-        # 下载图片并识别
-        resp = requests.get(img_url)
-        content = resp.content
-        plan = cap.run_dict(content)
+        # 服务端下载图片：无 CORS/反爬限制，requests 直取即可
+        resp = requests.get(info["imgUrl"], timeout=10)
+        # 关键：把题面文字传给识别器。否则现在的验证码（纯文本题面、背景图无题目条）
+        # 会退化成"按从左到右返回"，点击顺序必错。
+        plan = cap.run_dict(resp.content, click_text=click_text)
 
-        if not plan or not plan.get("point"):
+        points = plan.get("point") if plan else None
+        if not points:
             print("模型未识别到点击目标")
             return False
 
-        orig_w, orig_h = plan.get("imgW"), plan.get("imgH")
-        print(f"图片尺寸: {orig_w} x {orig_h}, 识别到 {len(plan['point'])} 个目标")
+        orig_w, orig_h = plan["imgW"], plan["imgH"]
+        box = info["box"]
+        scale_x = box["width"] / orig_w
+        scale_y = box["height"] / orig_h
+        print(f"原图 {orig_w}x{orig_h} → 显示 {box['width']:.0f}x{box['height']:.0f}，"
+              f"识别到 {len(points)} 个目标")
 
-        # 获取验证码图片在页面上的显示位置和尺寸
-        img_box = img_element.bounding_box()
-        if not img_box:
-            print("无法获取验证码图片位置")
-            return False
+        time.sleep(0.5)
 
-        display_w, display_h = img_box['width'], img_box['height']
-        print(f"显示尺寸: {display_w} x {display_h}")
-
-        scale_x = display_w / orig_w
-        scale_y = display_h / orig_h
-        X, Y = img_box['x'], img_box['y']
-
-        time.sleep(0.8)
-
-        # 依次点击每个目标
-        for i, point in enumerate(plan["point"]):
-            x_rel = point.get("x_rel")
-            y_rel = point.get("y_rel")
-            click_x = X + x_rel * scale_x
-            click_y = Y + y_rel * scale_y
+        # 依次点击每个目标（plan['point'] 已按点击顺序排好）
+        for i, p in enumerate(points):
+            click_x = box["x"] + p["x_rel"] * scale_x
+            click_y = box["y"] + p["y_rel"] * scale_y
             print(f"  点击第 {i+1} 个目标: ({click_x:.0f}, {click_y:.0f})")
             page.mouse.click(click_x, click_y)
-            time.sleep(0.8)
+            time.sleep(0.3)
 
-        # 查找并点击确认按钮
-        time.sleep(0.5)
-        confirm_selectors = [
-            'a.tcaptcha-verify-btn',
-            'button.tcaptcha-verify-btn',
-            '.tcaptcha-verify-btn',
-            '#tcaptcha-verify-btn',
-        ]
-        for sel in confirm_selectors:
-            try:
-                btn = target.query_selector(sel)
-                if btn and btn.is_visible():
-                    btn.click()
-                    print("已点击确认按钮")
-                    break
-            except Exception:
-                continue
+        # 点击确认按钮
+        confirm = _find_confirm_point(page)
+        if confirm:
+            page.mouse.click(confirm["x"], confirm["y"])
+            print("已点击确认按钮")
+        else:
+            print("未找到确认按钮（可能验证码已自动提交）")
 
         print("验证码点击完成，已提交")
         return True
@@ -168,42 +172,6 @@ def handle_tencent_captcha(page):
     except Exception as e:
         print(f"验证码处理异常: {e}")
         return False
-
-
-def wait_for_captcha_and_solve(page, timeout=30):
-    """
-    监测验证码出现并自动处理
-    返回: True 验证码处理成功或无需验证，False 处理失败
-    """
-    print(f"监测验证码，最长等待 {timeout} 秒...")
-    start = time.time()
-
-    while time.time() - start < timeout:
-        # 检查腾讯验证码是否出现
-        captcha_visible = page.evaluate('''() => {
-            // 检查主页面上的 tcaptcha
-            const wrapper = document.getElementById('tcaptcha_transform_dy');
-            if (wrapper) {
-                const style = window.getComputedStyle(wrapper);
-                if (style.position === 'fixed' &&
-                    parseFloat(style.opacity) >= 0.5 &&
-                    style.display !== 'none') {
-                    return true;
-                }
-            }
-            // 检查 iframe 中的验证码
-            const iframes = document.querySelectorAll('iframe[src*="captcha"]');
-            return iframes.length > 0;
-        }''')
-
-        if captcha_visible:
-            print("检测到腾讯验证码，开始自动识别...")
-            return handle_tencent_captcha(page)
-
-        time.sleep(1)
-
-    print("未检测到验证码")
-    return True
 
 
 def ensure_billing_cycle(page, cycle):
@@ -269,9 +237,14 @@ def click_buy(page, plan_name="Pro", cycle="quarter"):
         print("未找到购买按钮")
         return False
 
-    # 强制启用按钮（绕过禁用状态）
-    page.evaluate('(btn) => { btn.disabled = false; btn.removeAttribute("disabled"); }', btn)
-    btn.click()
+    # 用 JS 直接点击：强制启用并触发 .click()。
+    # 不用 Playwright 的 btn.click()——它会等元素"可点击"最长 30 秒、每次重试都
+    # scrolling into view，一旦被登录框/验证码遮挡就会阻塞整个循环并和用户抢滚动条。
+    page.evaluate('''(btn) => {
+        btn.disabled = false;
+        btn.removeAttribute("disabled");
+        btn.click();
+    }''', btn)
     print(f"已点击 {plan_name} 购买按钮")
     return True
 
@@ -307,6 +280,39 @@ def detect_dialog(page):
     }''')
 
 
+# 专用配置目录：不要用日常 Chrome 的默认 User Data，否则 Chrome 会因 SingletonLock
+# 自行拉起新进程接管、甩开 Playwright 启动的进程，导致 launch_persistent_context 卡死。
+# 这个目录是独立的，第一次运行需在弹出的窗口里手动登录一次 bigmodel.cn，之后会一直复用。
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".chrome-profile")
+
+
+def is_login_open(page):
+    """登录弹窗（手机号+验证码那个框）是否正显示。未登录访问 glm-coding 时网站会自动弹它。"""
+    try:
+        return page.evaluate('''() => {
+            const dlg = document.querySelector('.login-content, .login-new-form, .login-form');
+            if (!dlg) return false;
+            const r = dlg.getBoundingClientRect();
+            return r.width > 5 && r.height > 5;
+        }''')
+    except Exception:
+        return False
+
+
+def wait_until_logged_in(page, appear_grace=2.0):
+    """自动等待登录完成：不需要回终端按键。
+    - 已登录：登录框不会出现，直接放行；
+    - 未登录：网站自动弹登录框，你在浏览器里输手机号+验证码登录，框消失即自动继续。"""
+    time.sleep(appear_grace)  # 给登录弹窗一点出现时间
+    if not is_login_open(page):
+        print("已是登录状态，无需登录。")
+        return
+    print("检测到登录弹窗：请在浏览器里输入手机号+验证码登录（无需回到终端按键，登录后自动继续）...")
+    while is_login_open(page):
+        time.sleep(1)
+    print("登录完成，继续。")
+
+
 def main():
     target_time = time.strptime(
         f"{CONFIG['target_hour']}:{CONFIG['target_minute']}:{CONFIG['target_second']}",
@@ -316,17 +322,33 @@ def main():
     cycle = CONFIG["billing_cycle"]
 
     with sync_playwright() as p:
-        # 使用本地 Chrome + 已登录的用户配置（需先关闭 Chrome）
-        chrome_user_data = os.path.expanduser("~/.config/google-chrome")
+        # 用项目专用配置目录（非日常主配置），避免 Chrome 进程接管导致卡死
+        print(f"[诊断] 使用配置目录: {PROFILE_DIR}")
         context = p.chromium.launch_persistent_context(
-            user_data_dir=chrome_user_data,
+            user_data_dir=PROFILE_DIR,
             headless=False,
             channel="chrome",      # 使用系统安装的 Chrome
             args=["--disable-blink-features=AutomationControlled"],
         )
+        # 用新标签页打开 glm-coding——未登录时网站会在新标签里自动弹出登录框，
+        # 这正是想保留的体验。顺手关掉启动自带的空白初始页，避免多一个无用标签。
         page = context.new_page()
-        page.goto(URL, wait_until='domcontentloaded')
+        for old in list(context.pages):
+            if old is not page and old.url in ("about:blank", ""):
+                try:
+                    old.close()
+                except Exception:
+                    pass
+        # init 必须在 goto 之前：add_init_script / page.route 只对其后的导航生效
         init(page)
+        try:
+            page.goto(URL, wait_until='domcontentloaded', timeout=60000)
+        except Exception as e:
+            print(f"[诊断] 导航异常（稍后会重试）: {e}")
+        page.bring_to_front()
+
+        # 自动等待登录：登录框在就等你登，登录框消失就继续，全程不用回终端按键
+        wait_until_logged_in(page)
 
         print(f"页面已加载，目标套餐: {plan} ({CYCLE_LABELS[cycle]})")
         print(f"目标时间: {CONFIG['target_hour']:02d}:{CONFIG['target_minute']:02d}:{CONFIG['target_second']:02d}")
@@ -335,71 +357,88 @@ def main():
         max_retry = 300
         completed = False
 
-        while not completed and retry_count < max_retry:
-            now = time.localtime()
-            now_seconds = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
-            target_seconds = target_time.tm_hour * 3600 + target_time.tm_min * 60 + target_time.tm_sec
+        try:
+            while not completed and retry_count < max_retry:
+                now = time.localtime()
+                now_seconds = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
+                target_seconds = target_time.tm_hour * 3600 + target_time.tm_min * 60 + target_time.tm_sec
 
-            # 还没到时间，等待
-            diff = target_seconds - now_seconds
-            if diff > 60:
-                print(f"\r倒计时: {diff // 60}分{diff % 60}秒", end='', flush=True)
-                time.sleep(1)
-                continue
-            if diff > 0:
-                print(f"\r倒计时: {diff}秒", end='', flush=True)
-                time.sleep(0.1)
-                continue
-
-            print(f"\n已到目标时间，开始抢购...")
-
-            # 处理弹窗
-            dialog = detect_dialog(page)
-            if dialog:
-                dtype = dialog.get('type')
-                if dtype in ('success-pay', 'confirm-pay'):
-                    print("抢购成功！弹出支付窗口，请扫码支付")
-                    completed = True
-                    break
-                elif dtype in ('busy', 'empty-price'):
-                    retry_count += 1
-                    print(f"[{retry_count}] 无效弹窗({dtype})，关闭重试...")
-                    close_btn = page.query_selector('.el-dialog__wrapper:not([style*="display: none"]) .el-dialog__headerbtn')
-                    if close_btn:
-                        close_btn.click()
-                    time.sleep(0.4)
+                # 还没到时间，等待
+                diff = target_seconds - now_seconds
+                if diff > 60:
+                    print(f"\r倒计时: {diff // 60}分{diff % 60}秒", end='', flush=True)
+                    time.sleep(1)
+                    continue
+                if diff > 0:
+                    print(f"\r倒计时: {diff}秒", end='', flush=True)
+                    time.sleep(0.1)
                     continue
 
-            # 检测验证码
-            captcha_visible = page.evaluate('''() => {
-                const w = document.getElementById('tcaptcha_transform_dy');
-                if (!w) return false;
-                const s = window.getComputedStyle(w);
-                return s.position === 'fixed' && parseFloat(s.opacity) >= 0.5;
-            }''')
+                print(f"\n已到目标时间，开始抢购...")
 
-            if captcha_visible:
-                print("检测到验证码，自动识别中...")
-                if not handle_tencent_captcha(page):
-                    print("验证码识别失败，等待手动处理...")
-                    time.sleep(5)
-                time.sleep(1)
-                continue
+                # 处理弹窗
+                dialog = detect_dialog(page)
+                if dialog:
+                    dtype = dialog.get('type')
+                    if dtype in ('success-pay', 'confirm-pay'):
+                        print("抢购成功！弹出支付窗口，请扫码支付")
+                        completed = True
+                        break
+                    elif dtype in ('busy', 'empty-price'):
+                        retry_count += 1
+                        print(f"[{retry_count}] 无效弹窗({dtype})，关闭重试...")
+                        close_btn = page.query_selector('.el-dialog__wrapper:not([style*="display: none"]) .el-dialog__headerbtn')
+                        if close_btn:
+                            close_btn.click()
+                        time.sleep(0.4)
+                        continue
 
-            # 点击购买
-            if click_buy(page, plan, cycle):
-                retry_count += 1
-                print(f"[{retry_count}] 已点击购买，等待响应...")
-                time.sleep(0.3)
-            else:
-                time.sleep(0.2)
+                # 检测验证码
+                captcha_visible = page.evaluate('''() => {
+                    const w = document.getElementById('tcaptcha_transform_dy');
+                    if (!w) return false;
+                    const s = window.getComputedStyle(w);
+                    return s.position === 'fixed' && parseFloat(s.opacity) >= 0.5;
+                }''')
 
-        if completed:
-            print("\n抢购流程完成！")
-        elif retry_count >= max_retry:
-            print(f"\n已达最大重试次数({max_retry})，停止")
+                if captcha_visible:
+                    print("检测到验证码，自动识别中...")
+                    if not handle_tencent_captcha(page):
+                        print("验证码识别失败，等待手动处理...")
+                        time.sleep(5)
+                    time.sleep(1)
+                    continue
 
-        time.sleep(1000)
+                # 点击购买
+                if click_buy(page, plan, cycle):
+                    retry_count += 1
+                    print(f"[{retry_count}] 已点击购买，等待响应...")
+                    time.sleep(0.3)
+                else:
+                    time.sleep(0.2)
+
+            if completed:
+                print("\n抢购流程完成！")
+            elif retry_count >= max_retry:
+                print(f"\n已达最大重试次数({max_retry})，停止")
+        except KeyboardInterrupt:
+            print("\n已手动中断。")
+        except Exception as e:
+            print(f"\n运行出错: {e}")
+        finally:
+            # Playwright 启动的浏览器归脚本管：脚本一退出（Ctrl+C 或正常结束）浏览器必关，
+            # 无法让它脱离脚本独活。所以这里让脚本继续挂着，浏览器就一直开着，方便扫码支付/排查。
+            print("\n" + "=" * 56)
+            print("流程结束。脚本会继续运行以保持浏览器打开（方便扫码支付/查看）。")
+            print("  · 想继续用浏览器：什么都别动，留着即可。")
+            print("  · 想退出：关闭浏览器窗口，或在终端按 Ctrl+C —— 注意这会")
+            print("    一并关闭这个由脚本启动的浏览器（Playwright 机制，无法避免）。")
+            print("=" * 56)
+            try:
+                while context.pages:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                pass
 
 
 if __name__ == '__main__':
