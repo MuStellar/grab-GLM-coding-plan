@@ -27,6 +27,9 @@
   if (window.__autoGlmSimple16Initialized) return;
   window.__autoGlmSimple16Initialized = true;
 
+  // 抢购目标路径（限流回跳等内部导航统一使用）
+  const GLM_PATH = '/glm-coding?ic=FJGOX95A1A';
+
   // ==========================================
   // 网络拦截层
   // ==========================================
@@ -109,7 +112,7 @@
     const url = args[2] || '';
     if (url && url.includes('rate-limit')) {
       console.log('[Auto-GLM-1.6] 拦截 pushState 跳转至限流页，强制跳转回目标页');
-      setTimeout(() => { history.pushState(null, '', '/glm-coding'); }, Math.floor(Math.random() * 701) + 500);
+      setTimeout(() => { history.pushState(null, '', GLM_PATH); }, Math.floor(Math.random() * 701) + 500);
       return;
     }
     return originalPushState.apply(this, args);
@@ -118,7 +121,7 @@
     const url = args[2] || '';
     if (url && url.includes('rate-limit')) {
       console.log('[Auto-GLM-1.6] 拦截 replaceState 跳转至限流页，强制跳转回目标页');
-      setTimeout(() => { history.replaceState(null, '', '/glm-coding'); }, Math.floor(Math.random() * 701) + 500);
+      setTimeout(() => { history.replaceState(null, '', GLM_PATH); }, Math.floor(Math.random() * 701) + 500);
       return;
     }
     return originalReplaceState.apply(this, args);
@@ -633,9 +636,9 @@
     if (!location.pathname.includes('/html/rate-limit.html')) return '';
     try {
       const redirect = new URLSearchParams(location.search).get('redirect');
-      return redirect || '/glm-coding';
+      return redirect || GLM_PATH;
     } catch {
-      return '/glm-coding';
+      return GLM_PATH;
     }
   }
 

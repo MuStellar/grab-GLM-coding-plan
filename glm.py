@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 from src import captcha
 
 cap = captcha.TextSelectCaptcha()
-URL = "https://bigmodel.cn/glm-coding"
+URL = "https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A"
 CAPTCHA_WRAPPER_ID = "tcaptcha_transform_dy"
 
 # 抢购配置

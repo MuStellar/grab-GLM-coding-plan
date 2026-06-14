@@ -2,7 +2,7 @@
 
 基于 [Text_select_captcha](https://github.com/MgArcher/Text_select_captcha) 验证码识别系统，通过油猴脚本实现 GLM Coding 套餐准点自动抢购，支持点选验证码自动识别。
 
-[拼好模打9.5折](https://www.bigmodel.cn/glm-coding?ic=CCQHLMSXTP)
+[拼好模打9.5折](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)
 
 ## 预备姿势
 - 使用拼好模链接优惠
@@ -35,7 +35,7 @@ python service.py
 
 3. 将 [glm.js](glm.js) 添加为油猴脚本
 
-4. 打开 [GLM Coding 页面](https://bigmodel.cn/glm-coding)，页面左下角会出现控制面板
+4. 打开 [GLM Coding 页面](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)，页面左下角会出现控制面板
 
 5. 在面板中配置套餐、周期和目标时间，点击「开启自动重试购买」
 
