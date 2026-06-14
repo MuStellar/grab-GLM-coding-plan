@@ -1,69 +1,71 @@
 @echo off
-chcp 65001 >nul
+REM NOTE: This launcher uses English only on purpose.
+REM cmd.exe cannot reliably parse non-ASCII (Chinese) batch files - it
+REM desyncs and splits commands. Full Chinese guide is in README.md.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo ====================================================
-echo   GLM Coding 自动抢购助手 - 一键启动 (Windows)
+echo   GLM Coding grab helper - one-click launcher
 echo ====================================================
 echo.
 
-REM ---- 1. 找 Python ----
+REM ---- 1. Find Python ----
 set "PY="
 where py >nul 2>nul && set "PY=py -3"
 if not defined PY (
     where python >nul 2>nul && set "PY=python"
 )
 if not defined PY (
-    echo [错误] 没找到 Python。请先安装 Python 3.8+ 并在安装时勾选
-    echo        "Add Python to PATH"，下载地址：
-    echo        https://www.python.org/downloads/
+    echo [ERROR] Python not found.
+    echo         Install Python 3.8+ and tick "Add Python to PATH":
+    echo         https://www.python.org/downloads/
     echo.
     pause
     exit /b 1
 )
 
-REM ---- 2. 建虚拟环境（首次） ----
+REM ---- 2. Create virtual env (first run only) ----
 if not exist ".venv\Scripts\python.exe" (
-    echo [1/3] 首次运行：正在创建虚拟环境 .venv ...
+    echo [1/3] First run: creating virtual env .venv ...
     %PY% -m venv .venv
     if errorlevel 1 (
-        echo [错误] 创建虚拟环境失败，请确认 Python 安装完整。
+        echo [ERROR] Failed to create virtual env. Check your Python install.
         pause
         exit /b 1
     )
 )
 set "VPY=.venv\Scripts\python.exe"
 
-REM ---- 3. 装依赖 ----
-echo [2/3] 正在安装/检查依赖（首次较慢，请耐心等待）...
+REM ---- 3. Install dependencies ----
+echo [2/3] Installing/checking dependencies (first run is slow, please wait)...
 "%VPY%" -m pip install --upgrade pip >nul 2>nul
 "%VPY%" -m pip install -r requirements.txt
 if errorlevel 1 (
-    echo [错误] 依赖安装失败，请检查网络后重试。
+    echo [ERROR] Dependency install failed. Check your network and retry.
     pause
     exit /b 1
 )
 
-REM ---- 4. 选模式 ----
+REM ---- 4. Choose mode ----
 echo.
-echo [3/3] 选择运行模式：
-echo    1) Playwright 全自动抢购（推荐：免油猴、免单独起服务）
-echo    2) 启动验证码识别服务（配合油猴脚本 glm.js 使用）
+echo [3/3] Choose a mode:
+echo    1) Playwright fully-automatic grab  (recommended: no Tampermonkey, no separate service)
+echo    2) Start captcha recognition service (used together with the Tampermonkey script glm.js)
 echo.
-set /p MODE="请输入 1 或 2 后回车: "
+set /p MODE="Enter 1 or 2, then press Enter: "
 
 if "%MODE%"=="1" (
     echo.
-    echo 启动 Playwright 抢购脚本 glm.py ...
+    echo Starting Playwright grab script glm.py ...
     "%VPY%" glm.py
 ) else if "%MODE%"=="2" (
     echo.
-    echo 启动验证码识别服务 http://127.0.0.1:8123
-    echo 保持本窗口开着，再去浏览器里用油猴脚本抢购。
+    echo Starting captcha recognition service at http://127.0.0.1:8123
+    echo Keep this window open, then grab in the browser via the Tampermonkey script.
     "%VPY%" service.py
 ) else (
-    echo 未识别的选项，已退出。
+    echo Unrecognized choice, exiting.
 )
 
 echo.

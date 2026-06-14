@@ -32,12 +32,16 @@
 - **Windows**：双击 [`start.cmd`](start.cmd)
 - **Linux / macOS**：终端里运行 `chmod +x start.sh && ./start.sh`
 
-运行后会让你二选一：
+运行后会让你二选一（脚本提示为英文，含义如下）：
 
 ```
-1) Playwright 全自动抢购（推荐：免油猴、免单独起服务）
-2) 启动验证码识别服务（配合油猴脚本 glm.js 使用）
+1) Playwright fully-automatic grab   → Playwright 全自动抢购（推荐：免油猴、免单独起服务）
+2) Start captcha recognition service → 启动验证码识别服务（配合油猴脚本 glm.js 使用）
 ```
+
+输入 `1` 或 `2` 回车即可。
+
+> 为什么 Windows 脚本是英文？因为 `cmd.exe` 无法可靠解析含中文的批处理文件（会把命令切断、乱码），所以 `start.cmd` 故意只用英文；`start.sh`（Linux/macOS）不受此限，用的是中文。
 
 > 首次运行会创建 `.venv` 虚拟环境并联网装依赖，较慢；之后再启动就很快了。依赖只装在项目里的 `.venv`，不污染系统 Python。
 
