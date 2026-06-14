@@ -1,6 +1,6 @@
-# GLM Coding 自动抢购助手
+# GLM Coding Plan 自动抢购助手
 
-GLM Coding 套餐准点自动抢购，自动点选验证码。验证码识别在本地完成，不上传第三方。支持 Windows、Linux、macOS。
+GLM Coding Plan 套餐准点自动抢购，自动点选验证码。验证码识别在本地完成，不上传第三方。支持 Windows、Linux、macOS。
 
 [拼好模 9.5 折链接](https://www.bigmodel.cn/glm-coding?ic=FJGOX95A1A)
 
@@ -16,6 +16,8 @@ GLM Coding 套餐准点自动抢购，自动点选验证码。验证码识别在
 
 1. 安装 Python 3.8 以上。到 [python.org](https://www.python.org/downloads/) 下载，安装时勾选 “Add Python to PATH”。
 2. 安装 Google Chrome。
+
+Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 会在建虚拟环境失败时自动用 apt 补装（需输入 sudo 密码）。验证码所需的中文字体已随项目内置，无需另装。
 
 ## 选哪种用法
 

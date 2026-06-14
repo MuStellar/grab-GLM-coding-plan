@@ -20,9 +20,33 @@ else
 fi
 
 # ---- 2. 建虚拟环境（首次） ----
+# 既判断 venv 在不在，也判断里面的 pip 可不可用：上次中断或缺 venv 包会留下
+# 没装 pip 的半成品 .venv，得删掉重建，否则后面 pip install 会报 No module named pip。
+create_venv() {
+    echo "[1/3] 正在创建虚拟环境 .venv ..."
+    if "$PY" -m venv .venv; then
+        return
+    fi
+    # Debian/Ubuntu 默认不带 venv 包，建虚拟环境会失败。能用 apt 就自动补装再重试。
+    if command -v apt >/dev/null 2>&1; then
+        echo "创建失败，疑似缺少 venv 包，尝试自动安装（需要 sudo 密码）..."
+        if sudo apt install -y python3-venv && "$PY" -m venv .venv; then
+            return
+        fi
+    fi
+    echo
+    echo "[错误] 创建虚拟环境失败。请手动安装 venv 包后重试："
+    echo "        sudo apt install python3-venv      # Debian/Ubuntu"
+    echo "       装好后重新运行 ./start.sh"
+    exit 1
+}
+
 if [ ! -x ".venv/bin/python" ]; then
-    echo "[1/3] 首次运行：正在创建虚拟环境 .venv ..."
-    "$PY" -m venv .venv
+    create_venv
+elif ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    echo "检测到 .venv 不完整（缺少 pip），删除后重建 ..."
+    rm -rf .venv
+    create_venv
 fi
 VPY=".venv/bin/python"
 

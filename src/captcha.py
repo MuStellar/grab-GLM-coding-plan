@@ -38,6 +38,9 @@ _CJK_FONT_CANDIDATES = [
     # macOS
     "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/STHeiti Medium.ttc",
+    # 仓库自带兜底（OFL 可分发）：以上系统字体都没有时用它，保证任何平台开箱即用。
+    # 黑体字形，实测识别正常；放在最后，有系统字体时仍优先用系统的。
+    os.path.join(os.path.dirname(__file__), "..", "fonts", "NotoSansCJKsc-Regular.otf"),
 ]
 
 
