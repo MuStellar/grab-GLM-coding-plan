@@ -18,10 +18,10 @@ CAPTCHA_WRAPPER_ID = "tcaptcha_transform_dy"
 
 # 抢购配置
 CONFIG = {
-    "target_plan": "Pro",       # Lite / Pro / Max
-    "billing_cycle": "quarter", # month / quarter / year
-    "target_hour": 15,
-    "target_minute": 17,
+    "target_plan": "Lite",      # Lite / Pro / Max
+    "billing_cycle": "month",   # month / quarter / year
+    "target_hour": 10,          # 每天早上 10:00 放库存
+    "target_minute": 0,
     "target_second": 0,
 }
 
@@ -48,6 +48,24 @@ def init(page):
         content_type='application/json',
         body='{"code":0,"msg":"success","data":null,"success":true}'
     ))
+
+    # 定点改写售罄数据（与 JS 版一致）：把 isSoldOut/disabled/soldOut/stock 改成可购买
+    def _rewrite_sold_out(route):
+        try:
+            resp = route.fetch()
+            body = resp.text()
+            if ('"isSoldOut":true' in body or '"disabled":true' in body
+                    or '"soldOut":true' in body):
+                body = (body.replace('"isSoldOut":true', '"isSoldOut":false')
+                            .replace('"disabled":true', '"disabled":false')
+                            .replace('"soldOut":true', '"soldOut":false')
+                            .replace('"stock":0', '"stock":999'))
+            route.fulfill(response=resp, body=body)
+        except Exception as e:
+            print(f"售罄改写失败，放行原响应: {e}")
+            route.continue_()
+
+    page.route('**/api/biz/pay/preview**', _rewrite_sold_out)
 
 
 def _extract_captcha_info(page):
@@ -252,9 +270,16 @@ def click_buy(page, plan_name="Pro", cycle="quarter"):
 def detect_dialog(page):
     """检测弹窗状态，返回弹窗类型或 None"""
     return page.evaluate('''() => {
+        const isVisible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            const s = getComputedStyle(el);
+            return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+        };
         const wrappers = document.querySelectorAll('.el-dialog__wrapper');
         for (const wrapper of wrappers) {
-            if (wrapper.style.display === 'none') continue;
+            if (!isVisible(wrapper)) continue;
             const emptyWrap = wrapper.querySelector('.empty-data-wrap');
             if (emptyWrap && emptyWrap.textContent.includes('购买人数较多')) {
                 return { type: 'busy' };
@@ -262,7 +287,7 @@ def detect_dialog(page):
             const payDialog = wrapper.querySelector('.pay-dialog') ||
                               wrapper.querySelector('.scan-code-box') ||
                               wrapper.querySelector('.confirm-pay-btn');
-            if (payDialog) {
+            if (isVisible(payDialog)) {
                 const priceItems = wrapper.querySelectorAll('.price-item');
                 for (const el of priceItems) {
                     const text = el.textContent.replace(/[￥\\\\s]/g, '').trim();
@@ -270,7 +295,7 @@ def detect_dialog(page):
                         return { type: 'success-pay' };
                     }
                 }
-                if (wrapper.querySelector('.confirm-pay-btn')) {
+                if (isVisible(wrapper.querySelector('.confirm-pay-btn'))) {
                     return { type: 'confirm-pay' };
                 }
                 return { type: 'empty-price' };
@@ -356,6 +381,7 @@ def main():
         retry_count = 0
         max_retry = 300
         completed = False
+        interrupted = False
 
         try:
             while not completed and retry_count < max_retry:
@@ -422,23 +448,28 @@ def main():
             elif retry_count >= max_retry:
                 print(f"\n已达最大重试次数({max_retry})，停止")
         except KeyboardInterrupt:
+            interrupted = True
             print("\n已手动中断。")
         except Exception as e:
             print(f"\n运行出错: {e}")
         finally:
-            # Playwright 启动的浏览器归脚本管：脚本一退出（Ctrl+C 或正常结束）浏览器必关，
-            # 无法让它脱离脚本独活。所以这里让脚本继续挂着，浏览器就一直开着，方便扫码支付/排查。
-            print("\n" + "=" * 56)
-            print("流程结束。脚本会继续运行以保持浏览器打开（方便扫码支付/查看）。")
-            print("  · 想继续用浏览器：什么都别动，留着即可。")
-            print("  · 想退出：关闭浏览器窗口，或在终端按 Ctrl+C —— 注意这会")
-            print("    一并关闭这个由脚本启动的浏览器（Playwright 机制，无法避免）。")
-            print("=" * 56)
-            try:
-                while context.pages:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                pass
+            if interrupted:
+                # 终端的 Ctrl+C 是发给整个进程组的，Chrome 子进程会同时收到并自行退出，
+                # 浏览器在这一刻已经关了，脚本这里无法再挽留，直接结束。
+                print("浏览器已随 Ctrl+C 一并关闭，脚本退出。")
+            else:
+                # 正常结束（抢到/达上限）：脚本继续挂着，浏览器保持打开，方便扫码支付/查看。
+                # 注意：此时按 Ctrl+C 会把脚本和浏览器一起关掉（Playwright 机制，无法避免）。
+                print("\n" + "=" * 56)
+                print("流程结束。脚本继续运行以保持浏览器打开（方便扫码支付/查看）。")
+                print("  · 想继续用浏览器：什么都别动，留着即可。")
+                print("  · 想退出：关闭浏览器窗口，或按 Ctrl+C（会一并关闭浏览器）。")
+                print("=" * 56)
+                try:
+                    while context.pages:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    pass
 
 
 if __name__ == '__main__':

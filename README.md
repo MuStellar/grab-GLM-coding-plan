@@ -60,7 +60,8 @@ python glm.py
 1. 自动打开一个**专用配置的 Chrome 窗口**（项目目录下的 `.chrome-profile`，与你日常 Chrome 互不干扰，**无需关闭日常 Chrome**），并跳转到 glm-coding 抢购页
 2. 未登录时网站会自动弹出登录框 → 在该窗口内用手机号+验证码登录（**无需回到终端按键**，脚本自动检测登录完成后继续；登录态会保存在 `.chrome-profile`，下次免登录）
 3. 进入倒计时 → 到点自动选周期、点购买 → 遇腾讯点选验证码自动识别并点选提交
-4. 流程结束后浏览器保持打开（方便扫码支付）；关闭浏览器窗口或在终端按 `Ctrl+C` 即退出
+4. 抢到后自动停止点击、保持浏览器停在支付弹窗，你可从容扫码支付（其间脚本不再点击，不会把支付窗口点没）
+5. 想退出：关闭浏览器窗口，或在终端按 `Ctrl+C`——注意 `Ctrl+C` 会随手关掉脚本启动的这个浏览器（终端信号会一并发给 Chrome 子进程，无法避免），所以**扫完码再退**
 
 > 注意：抢购时只认 `CONFIG` 里的**时分秒**、抢的是**当天**那个时刻；当天该时刻已过会立即开抢。
 
@@ -93,7 +94,10 @@ python glm.py
 - 验证码识别在进程内完成，无需单独启动 `service.py`
 - 专用 `.chrome-profile` 配置目录，免关闭日常 Chrome；登录态持久化，下次免登录
 - 自动检测登录状态，登录完成后自动继续，无需终端交互
+- 定点改写售罄数据（`/api/biz/pay/preview`）+ 绕过限流，与油猴版一致
+- 支付弹窗按「可见性」判定，避免隐藏残留节点造成误报停机
 - 定时倒计时 + 自动选周期 + JS 点击购买 + 腾讯验证码自动识别点选
+- 抢到后自动停止点击并保持浏览器打开，方便从容扫码支付
 
 ### 识别服务 API 增强
 
@@ -110,7 +114,9 @@ python glm.py
 ## 致谢
 
 - 验证码识别核心：[MgArcher/Text_select_captcha](https://github.com/MgArcher/Text_select_captcha)
-- 核心油猴脚本：linux.do社区 @ballen开源的脚本
+- 核心油猴脚本
+    - linux.do社区 @ballen 开源的原始脚本 原帖 https://linux.do/t/topic/1954655
+    - linux.do社区 @xcd-jjj111 的升级脚本 原帖 https://linux.do/t/topic/2191688 Github链接 https://github.com/lyingflatDDD/grab-GLM-coding-plan
 
 ## 免责声明
 

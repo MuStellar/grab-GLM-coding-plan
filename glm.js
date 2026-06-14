@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GLM Coding 全自动抢购助手 (增强版) v1.6
+// @name         GLM Coding 全自动抢购助手 (增强版) v1.7
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
 // @author       Codex
 // @match        *://bigmodel.cn/glm-coding*
@@ -40,7 +40,7 @@
     const [input] = args;
     const requestUrl = typeof input === 'string' ? input : input?.url || String(input || '');
     if (requestUrl.includes('/api/biz/rate-limit/check')) {
-      console.log('[Auto-GLM-1.6] 拦截限流检查，强制放行');
+      console.log('[Auto-GLM-1.7] 拦截限流检查，强制放行');
       return new Response(JSON.stringify({
         code: 0, msg: 'success', data: null, success: true
       }), {
@@ -55,7 +55,7 @@
       try {
         let text = await clone.text();
         if (text.includes('"isSoldOut":true') || text.includes('"disabled":true') || text.includes('"soldOut":true')) {
-          console.log('[Auto-GLM-1.6] 拦截售罄数据:', requestUrl);
+          console.log('[Auto-GLM-1.7] 拦截售罄数据:', requestUrl);
           text = text.replace(/"isSoldOut":true/g, '"isSoldOut":false')
             .replace(/"disabled":true/g, '"disabled":false')
             .replace(/"soldOut":true/g, '"soldOut":false')
@@ -67,7 +67,7 @@
           });
         }
       } catch (e) {
-        console.log('[Auto-GLM-1.6] Fetch拦截异常:', e.message);
+        console.log('[Auto-GLM-1.7] Fetch拦截异常:', e.message);
       }
     }
     return response;
@@ -88,7 +88,7 @@
           try {
             let text = this.responseText;
             if (text.includes('"isSoldOut":true') || text.includes('"disabled":true') || text.includes('"soldOut":true')) {
-              console.log('[Auto-GLM-1.6] 拦截XHR售罄数据:', this._reqUrl);
+              console.log('[Auto-GLM-1.7] 拦截XHR售罄数据:', this._reqUrl);
               text = text.replace(/"isSoldOut":true/g, '"isSoldOut":false')
                 .replace(/"disabled":true/g, '"disabled":false')
                 .replace(/"soldOut":true/g, '"soldOut":false')
@@ -97,7 +97,7 @@
               Object.defineProperty(this, 'response', { get: function () { return JSON.parse(text); } });
             }
           } catch (e) {
-            console.log('[Auto-GLM-1.6] XHR拦截异常:', e.message);
+            console.log('[Auto-GLM-1.7] XHR拦截异常:', e.message);
           }
         }
       }
@@ -111,7 +111,7 @@
   history.pushState = function (...args) {
     const url = args[2] || '';
     if (url && url.includes('rate-limit')) {
-      console.log('[Auto-GLM-1.6] 拦截 pushState 跳转至限流页，强制跳转回目标页');
+      console.log('[Auto-GLM-1.7] 拦截 pushState 跳转至限流页，强制跳转回目标页');
       setTimeout(() => { history.pushState(null, '', GLM_PATH); }, Math.floor(Math.random() * 701) + 500);
       return;
     }
@@ -120,14 +120,14 @@
   history.replaceState = function (...args) {
     const url = args[2] || '';
     if (url && url.includes('rate-limit')) {
-      console.log('[Auto-GLM-1.6] 拦截 replaceState 跳转至限流页，强制跳转回目标页');
+      console.log('[Auto-GLM-1.7] 拦截 replaceState 跳转至限流页，强制跳转回目标页');
       setTimeout(() => { history.replaceState(null, '', GLM_PATH); }, Math.floor(Math.random() * 701) + 500);
       return;
     }
     return originalReplaceState.apply(this, args);
   };
 
-  console.log('[Auto-GLM-1.6] 网络拦截器已注册');
+  console.log('[Auto-GLM-1.7] 网络拦截器已注册');
 
   // ==========================================
   // 验证码图片拦截层
@@ -140,7 +140,7 @@
   const po = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
       if (entry.name && (entry.name.includes('captcha') || entry.name.includes('tencent') || entry.name.includes('verify'))) {
-        console.log('[Auto-GLM-1.6] 检测到验证码图片请求:', entry.name.substring(0, 80));
+        console.log('[Auto-GLM-1.7] 检测到验证码图片请求:', entry.name.substring(0, 80));
       }
     }
   });
@@ -157,7 +157,7 @@
       set(val) {
         _src = val;
         if (val && (val.includes('captcha') || val.includes('tencent') || val.includes('verify'))) {
-          console.log('[Auto-GLM-1.6] 捕获验证码图片 URL:', val.substring(0, 80));
+          console.log('[Auto-GLM-1.7] 捕获验证码图片 URL:', val.substring(0, 80));
           img.addEventListener('load', () => {
             try {
               const canvas = document.createElement('canvas');
@@ -166,9 +166,9 @@
               canvas.getContext('2d').drawImage(img, 0, 0);
               const base64 = canvas.toDataURL('image/jpeg', 0.95);
               capturedCaptchaImage = { src: val, base64: base64, width: img.naturalWidth, height: img.naturalHeight };
-              console.log(`[Auto-GLM-1.6] 验证码图片已缓存: ${img.naturalWidth}x${img.naturalHeight}`);
+              console.log(`[Auto-GLM-1.7] 验证码图片已缓存: ${img.naturalWidth}x${img.naturalHeight}`);
             } catch (e) {
-              console.log('[Auto-GLM-1.6] 缓存验证码图片失败(跨域):', e.message);
+              console.log('[Auto-GLM-1.7] 缓存验证码图片失败(跨域):', e.message);
               // 跨域时只保存 src，用 dataType=1 由后端下载
               capturedCaptchaImage = { src: val, base64: null, width: img.naturalWidth, height: img.naturalHeight };
             }
@@ -194,7 +194,7 @@
         set(val) {
           _src = val;
           if (val && (val.includes('captcha') || val.includes('tencent') || val.includes('verify'))) {
-            console.log('[Auto-GLM-1.6] createElement 捕获验证码图片 URL:', val.substring(0, 80));
+            console.log('[Auto-GLM-1.7] createElement 捕获验证码图片 URL:', val.substring(0, 80));
             el.addEventListener('load', () => {
               try {
                 const canvas = document.createElement('canvas');
@@ -203,9 +203,9 @@
                 canvas.getContext('2d').drawImage(el, 0, 0);
                 const base64 = canvas.toDataURL('image/jpeg', 0.95);
                 capturedCaptchaImage = { src: val, base64: base64, width: el.naturalWidth, height: el.naturalHeight };
-                console.log(`[Auto-GLM-1.6] 验证码图片已缓存: ${el.naturalWidth}x${el.naturalHeight}`);
+                console.log(`[Auto-GLM-1.7] 验证码图片已缓存: ${el.naturalWidth}x${el.naturalHeight}`);
               } catch (e) {
-                console.log('[Auto-GLM-1.6] 缓存验证码图片失败(跨域):', e.message);
+                console.log('[Auto-GLM-1.7] 缓存验证码图片失败(跨域):', e.message);
                 capturedCaptchaImage = { src: val, base64: null, width: el.naturalWidth, height: el.naturalHeight };
               }
             }, { once: true });
@@ -218,7 +218,7 @@
     return el;
   };
 
-  console.log('[Auto-GLM-1.6] 验证码图片拦截器已注册');
+  console.log('[Auto-GLM-1.7] 验证码图片拦截器已注册');
 
   // ==========================================
   // 页面状态层
@@ -504,11 +504,20 @@
     });
   }
 
+  // 元素是否真正可见：DOM 里存在但隐藏/零尺寸的残留节点会造成误判
+  function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+  }
+
   // 统一弹窗检测
   function detectDialogState() {
     const dialogWrappers = document.querySelectorAll('.el-dialog__wrapper');
     for (const wrapper of Array.from(dialogWrappers)) {
-      if (wrapper.style.display === 'none') continue;
+      if (!isVisible(wrapper)) continue;
 
       // 1. 检测 "购买人数较多"
       const emptyWrap = wrapper.querySelector('.empty-data-wrap');
@@ -517,11 +526,11 @@
       }
 
       // 2. 检测 支付相关弹窗
-      const isPayDialog = wrapper.querySelector('.pay-dialog') ||
-                          wrapper.querySelector('.scan-code-box') ||
-                          wrapper.querySelector('.confirm-pay-btn');
+      const payEl = wrapper.querySelector('.pay-dialog') ||
+                    wrapper.querySelector('.scan-code-box') ||
+                    wrapper.querySelector('.confirm-pay-btn');
 
-      if (isPayDialog) {
+      if (isVisible(payEl)) {
         let hasRealPrice = false;
 
         // 策略A：检测 .price-item 包含数字
@@ -550,7 +559,7 @@
             return { type: 'success-pay', closeBtn: wrapper.querySelector('.el-dialog__headerbtn') };
         }
 
-        if (wrapper.querySelector('.confirm-pay-btn')) {
+        if (isVisible(wrapper.querySelector('.confirm-pay-btn'))) {
             return { type: 'confirm-pay', closeBtn: wrapper.querySelector('.el-dialog__headerbtn') };
         }
 
@@ -645,7 +654,7 @@
   function redirectAwayFromRateLimitPage() {
     const redirectTarget = getRateLimitRedirectTarget();
     if (!redirectTarget) return false;
-    console.warn('[Auto-GLM-1.6] 当前位于限流页，尝试跳回:', redirectTarget);
+    console.warn('[Auto-GLM-1.7] 当前位于限流页，尝试跳回:', redirectTarget);
     location.replace(redirectTarget);
     return true;
   }
@@ -673,8 +682,8 @@
   const CYCLE_LABELS = { month: '连续包月', quarter: '连续包季', year: '连续包年' };
 
   const DEFAULT_CONFIG = {
-    targetPlan: 'Pro',
-    billingCycle: 'quarter',
+    targetPlan: 'Lite',
+    billingCycle: 'month',
     targetDate: '',        // 空 = 自动取"下一次"该时刻（今天没到则今天、过了则明天）
     targetHour: 10,
     targetMinute: 0,
@@ -742,7 +751,7 @@
   }
 
   function log(msg) {
-    console.log(`[Auto-GLM-1.6] ${msg}`);
+    console.log(`[Auto-GLM-1.7] ${msg}`);
     const logBox = document.getElementById('glm-simple-log-v16');
     if (logBox) {
       const time = new Date().toLocaleTimeString();
@@ -1189,7 +1198,7 @@
         <div class="glm-head-left">
           <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
           <span class="glm-title">GLM 抢购助手</span>
-          <span class="glm-badge">v1.6</span>
+          <span class="glm-badge">v1.7</span>
         </div>
         <div class="glm-head-btns">
           <button class="glm-iconbtn" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
@@ -1301,7 +1310,7 @@
     buildPanel();
     if (!countdownTimer) countdownTimer = setInterval(renderCountdown, 500);
     updateStatus('准备就绪');
-    log('脚本已加载 v1.6');
+    log('脚本已加载 v1.7');
   }
 
   if (document.readyState === 'loading') {
