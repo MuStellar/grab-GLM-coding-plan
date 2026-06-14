@@ -39,20 +39,30 @@ python service.py
 
 5. 在面板中配置套餐、周期和目标时间，点击「开启自动重试购买」
 
-### 方式二：Python (Playwright，有问题)
+### 方式二：Python (Playwright，全自动)
+
+无需油猴、无需单独启动 `service.py`——验证码识别在脚本进程内直接完成。
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
-编辑 [glm.py](glm.py) 中的 `CONFIG` 字段设置套餐与时间，然后：
+> 需本机已安装 Google Chrome（脚本用 `channel="chrome"` 调用系统 Chrome，不依赖 `playwright install`）。
+
+编辑 [glm.py](glm.py) 中的 `CONFIG` 设置套餐、周期与目标时分秒，然后：
 
 ```bash
 python glm.py
 ```
 
-> 需先关闭 Chrome 浏览器，脚本会复用本地 Chrome 的登录状态。
+运行流程：
+
+1. 自动打开一个**专用配置的 Chrome 窗口**（项目目录下的 `.chrome-profile`，与你日常 Chrome 互不干扰，**无需关闭日常 Chrome**），并跳转到 glm-coding 抢购页
+2. 未登录时网站会自动弹出登录框 → 在该窗口内用手机号+验证码登录（**无需回到终端按键**，脚本自动检测登录完成后继续；登录态会保存在 `.chrome-profile`，下次免登录）
+3. 进入倒计时 → 到点自动选周期、点购买 → 遇腾讯点选验证码自动识别并点选提交
+4. 流程结束后浏览器保持打开（方便扫码支付）；关闭浏览器窗口或在终端按 `Ctrl+C` 即退出
+
+> 注意：抢购时只认 `CONFIG` 里的**时分秒**、抢的是**当天**那个时刻；当天该时刻已过会立即开抢。
 
 ## 配置说明
 
@@ -79,10 +89,11 @@ python glm.py
 
 ### Python 抢购脚本 ([glm.py](glm.py))
 
-- 基于 Playwright 的浏览器自动化方案
-- 自动识别并处理腾讯验证码
-- 使用本地 Chrome 登录状态，免手动登录
-- 定时倒计时 + 自动点击购买
+- 基于 Playwright 的浏览器自动化方案，全程无人值守
+- 验证码识别在进程内完成，无需单独启动 `service.py`
+- 专用 `.chrome-profile` 配置目录，免关闭日常 Chrome；登录态持久化，下次免登录
+- 自动检测登录状态，登录完成后自动继续，无需终端交互
+- 定时倒计时 + 自动选周期 + JS 点击购买 + 腾讯验证码自动识别点选
 
 ### 识别服务 API 增强
 
