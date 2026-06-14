@@ -108,38 +108,44 @@ class TextSelectCaptcha(object):
     def run(self, image_path: str, click_text: Optional[str] = None) -> List[List[float]]:
         img = matchingMode.open_image(image_path)
         data = self.yolo.inference(img)
-        print(data)
-        target_boxes = [item[:4] for item in data if len(item) >= 6 and item[5] == 2]
+        # YOLO 类别：0 = 背景里可点的候选字；2 = 旧版“图片题目”。
+        # 当前腾讯点选的题面已改成纯文字（走 click_text 渲染匹配），类别 2 基本不再出现。
         char_dets = _dedup_overlapping([item for item in data if len(item) >= 6 and item[5] == 0])
         char_boxes = [item[:4] for item in char_dets]
         char_boxes.sort(key=lambda box: box[0])
-        print(f"检测到 {len(target_boxes)} 个目标，{len(char_boxes)} 个字符")
+        target_boxes = [item[:4] for item in data if len(item) >= 6 and item[5] == 2]
+
         if not char_boxes:
+            print("背景里没检出可点的字，跳过本次识别")
             return []
-        chars = [img[int(box[1]):int(box[3]), int(box[0]):int(box[2])] for box in char_boxes]
-        if target_boxes:
-            img_targets = [img[int(box[1]):int(box[3]), int(box[0]):int(box[2])] for box in target_boxes]
-            slys = self.pre.reason_all_batch(chars, img_targets)
-        elif click_text:
+        chars = [img[int(b[1]):int(b[3]), int(b[0]):int(b[2])] for b in char_boxes]
+
+        if click_text:
+            # 主路径：题面是文字（如“逞 笆 堡”）。把提示字渲染成图，按字形相似度匹配。
             chars_to_click = [c for c in click_text.replace(' ', '') if c.strip()]
+            print(f"题面文字「{' '.join(chars_to_click)}」，背景检出 {len(char_boxes)} 个候选字，按字形相似度匹配")
             img_targets = [_render_char(c) for c in chars_to_click]
             slys = self.pre.reason_all_batch(chars, img_targets)
-            print("渲染匹配分数:")
             for i, c in enumerate(chars_to_click):
-                col_scores = [slys[j][i] for j in range(len(slys))]
-                scores = sorted(enumerate(col_scores), key=lambda x: -x[1])
-                print(f"  '{c}' -> 最佳: char{scores[0][0]}({scores[0][1]:.3f}), 次佳: char{scores[1][0]}({scores[1][1]:.3f})" if len(scores) >= 2 else f"  '{c}' -> char{scores[0][0]}({scores[0][1]:.3f})")
+                ranked = sorted(((j, slys[j][i]) for j in range(len(slys))), key=lambda x: -x[1])
+                line = f"  '{c}' -> 最佳 char{ranked[0][0]}({ranked[0][1]:.3f})"
+                if len(ranked) >= 2:
+                    line += f"，次佳 char{ranked[1][0]}({ranked[1][1]:.3f})"
+                print(line)
+        elif target_boxes:
+            # 兜底：旧版图片题目，用图片相似度匹配（当前页面一般用不到）。
+            print(f"图片题目 {len(target_boxes)} 个，背景检出 {len(char_boxes)} 个候选字，按图片相似度匹配")
+            img_targets = [img[int(b[1]):int(b[3]), int(b[0]):int(b[2])] for b in target_boxes]
+            slys = self.pre.reason_all_batch(chars, img_targets)
         else:
+            print(f"无题面信息，仅按位置返回 {len(char_boxes)} 个候选字")
             return char_boxes
+
         sorted_result = matchingMode.find_overall_index_fast(slys)
-        # 按 target 顺序排列（target_index 越小 → 越先点击）
-        sorted_result.sort(key=lambda x: x[1])
+        sorted_result.sort(key=lambda x: x[1])  # 按题面顺序：target_index 越小越先点
         if click_text:
-            chars_to_click = [c for c in click_text.replace(' ', '') if c.strip()]
-            print(chars_to_click)
             sorted_result = sorted_result[:len(chars_to_click)]
-        result = [char_boxes[i] for i, _ in sorted_result]
-        return result
+        return [char_boxes[i] for i, _ in sorted_result]
 
     def run_dict(self, image_path: str, click_text: Optional[str] = None) -> Dict[str, Any]:
         img = matchingMode.open_image(image_path)

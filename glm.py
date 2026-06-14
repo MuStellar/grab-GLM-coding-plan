@@ -8,6 +8,7 @@
 import os
 import re
 import time
+from datetime import datetime, timedelta
 import requests
 from playwright.sync_api import sync_playwright
 from src import captcha
@@ -26,6 +27,20 @@ CONFIG = {
 }
 
 CYCLE_LABELS = {"month": "连续包月", "quarter": "连续包季", "year": "连续包年"}
+
+# 目标时刻后这么久内打开 → 仍抢「当天」；超过则滚到「明天」。与油猴版 WATCH_GRACE_MS 一致。
+GRACE_MINUTES = 40
+
+
+def resolve_target_dt(now=None):
+    """返回本次要抢的绝对时间点。今天的目标时刻若已过去超过 GRACE_MINUTES（默认 40min），
+    就滚到明天同一时刻；否则锁当天（当天该时刻已过、但在宽限内则立即开抢）。"""
+    now = now or datetime.now()
+    target = now.replace(hour=CONFIG["target_hour"], minute=CONFIG["target_minute"],
+                         second=CONFIG["target_second"], microsecond=0)
+    if now > target + timedelta(minutes=GRACE_MINUTES):
+        target += timedelta(days=1)
+    return target
 
 
 def log_console_message(msg):
@@ -339,10 +354,7 @@ def wait_until_logged_in(page, appear_grace=2.0):
 
 
 def main():
-    target_time = time.strptime(
-        f"{CONFIG['target_hour']}:{CONFIG['target_minute']}:{CONFIG['target_second']}",
-        "%H:%M:%S"
-    )
+    target_dt = resolve_target_dt()
     plan = CONFIG["target_plan"]
     cycle = CONFIG["billing_cycle"]
 
@@ -375,8 +387,9 @@ def main():
         # 自动等待登录：登录框在就等你登，登录框消失就继续，全程不用回终端按键
         wait_until_logged_in(page)
 
+        day_label = "今天" if target_dt.date() == datetime.now().date() else "明天"
         print(f"页面已加载，目标套餐: {plan} ({CYCLE_LABELS[cycle]})")
-        print(f"目标时间: {CONFIG['target_hour']:02d}:{CONFIG['target_minute']:02d}:{CONFIG['target_second']:02d}")
+        print(f"目标时间: {day_label} {target_dt:%Y-%m-%d %H:%M:%S}（超过目标时刻 {GRACE_MINUTES} 分钟才打开则抢明天）")
 
         retry_count = 0
         max_retry = 300
@@ -385,18 +398,17 @@ def main():
 
         try:
             while not completed and retry_count < max_retry:
-                now = time.localtime()
-                now_seconds = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
-                target_seconds = target_time.tm_hour * 3600 + target_time.tm_min * 60 + target_time.tm_sec
-
-                # 还没到时间，等待
-                diff = target_seconds - now_seconds
+                # 距目标时刻还有多少秒（负数=已到点）
+                diff = (target_dt - datetime.now()).total_seconds()
                 if diff > 60:
-                    print(f"\r倒计时: {diff // 60}分{diff % 60}秒", end='', flush=True)
+                    h, rem = divmod(int(diff), 3600)
+                    m, s = divmod(rem, 60)
+                    label = f"{h}时{m}分{s}秒" if h else f"{m}分{s}秒"
+                    print(f"\r倒计时: {label}    ", end='', flush=True)
                     time.sleep(1)
                     continue
                 if diff > 0:
-                    print(f"\r倒计时: {diff}秒", end='', flush=True)
+                    print(f"\r倒计时: {diff:.1f}秒   ", end='', flush=True)
                     time.sleep(0.1)
                     continue
 
