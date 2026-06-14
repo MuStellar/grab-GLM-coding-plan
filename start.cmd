@@ -6,7 +6,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo ====================================================
-echo   GLM Coding grab helper - one-click launcher
+echo   GLM Coding Plan grab helper - one-click launcher
 echo ====================================================
 echo.
 

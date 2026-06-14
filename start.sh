@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# GLM Coding 自动抢购助手 - 一键启动 (Linux / macOS)
+# GLM Coding Plan 自动抢购助手 - 一键启动 (Linux / macOS)
 # 用法：chmod +x start.sh && ./start.sh
 set -e
 cd "$(dirname "$0")"
 
 echo "===================================================="
-echo "  GLM Coding 自动抢购助手 - 一键启动 (Linux/macOS)"
+echo "  GLM Coding Plan 自动抢购助手 - 一键启动 (Linux/macOS)"
 echo "===================================================="
 echo
 

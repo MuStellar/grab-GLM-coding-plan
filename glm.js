@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         GLM Coding 全自动抢购助手 (增强版) v1.7
+// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7
 // @namespace    http://tampermonkey.net/
 // @version      1.7
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
@@ -1197,7 +1197,7 @@
       <div class="glm-head" id="glm-simple-head-v16">
         <div class="glm-head-left">
           <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
-          <span class="glm-title">GLM 抢购助手</span>
+          <span class="glm-title">GLM Coding Plan 抢购助手</span>
           <span class="glm-badge">v1.7</span>
         </div>
         <div class="glm-head-btns">

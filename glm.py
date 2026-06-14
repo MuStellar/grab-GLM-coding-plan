@@ -369,12 +369,25 @@ def main():
     with sync_playwright() as p:
         # 用项目专用配置目录（非日常主配置），避免 Chrome 进程接管导致卡死
         print(f"[诊断] 使用配置目录: {PROFILE_DIR}")
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=PROFILE_DIR,
-            headless=False,
-            channel="chrome",      # 使用系统安装的 Chrome
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        try:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=PROFILE_DIR,
+                headless=False,
+                channel="chrome",      # 使用系统安装的 Chrome
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        except Exception as e:
+            # 最常见的两种失败：没装系统 Chrome（channel=chrome 找不到二进制），
+            # 或没有图形界面（headless=False 在纯命令行环境起不来）。给一句能照做的提示，
+            # 别让用户对着一长串 Playwright traceback 发懵。
+            print("\n[错误] 启动 Chrome 失败：", e)
+            print("可能原因和解法：")
+            print("  1. 没装 Google Chrome —— 装好系统 Chrome，或运行：")
+            print("       playwright install chrome")
+            print("  2. 没有图形界面 —— 本脚本要弹出浏览器窗口，需在带桌面的环境运行")
+            print("     （WSL 需 WSLg；纯命令行服务器跑不了）。")
+            print("  3. Linux 缺系统库 —— 运行：sudo playwright install-deps")
+            return
         # 用新标签页打开 glm-coding——未登录时网站会在新标签里自动弹出登录框，
         # 这正是想保留的体验。顺手关掉启动自带的空白初始页，避免多一个无用标签。
         page = context.new_page()
