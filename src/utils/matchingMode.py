@@ -29,22 +29,19 @@ def _greedy_assignment(mat: np.ndarray, n_cols: int, k: int) -> List[Tuple[int, 
 
 def _optimal_assignment(mat: np.ndarray, n_rows: int, n_cols: int) -> List[Tuple[int, int]]:
     """枚举所有合法搭配，返回使所选 min(n_rows,n_cols) 对总分最大的分配。
-    字数很少（3~5），全排列开销可忽略，且避免贪心的局部错配。"""
+    字数很少（3~5），全排列开销可忽略，且避免贪心的局部错配。
+    统一按"行数<=列数"处理：行多时转置矩阵，最后把坐标转回来。"""
+    transposed = n_rows > n_cols
+    m = mat.T if transposed else mat
+    rows, cols = m.shape  # rows <= cols
     best_score = -np.inf
     best: List[Tuple[int, int]] = []
-    if n_rows <= n_cols:
-        for cols in permutations(range(n_cols), n_rows):
-            s = sum(mat[r, c] for r, c in zip(range(n_rows), cols))
-            if s > best_score:
-                best_score = s
-                best = [(r, c) for r, c in zip(range(n_rows), cols)]
-    else:
-        for rows in permutations(range(n_rows), n_cols):
-            s = sum(mat[r, c] for r, c in zip(rows, range(n_cols)))
-            if s > best_score:
-                best_score = s
-                best = [(r, c) for r, c in zip(rows, range(n_cols))]
-    return best
+    for pick in permutations(range(cols), rows):
+        s = sum(m[r, c] for r, c in zip(range(rows), pick))
+        if s > best_score:
+            best_score = s
+            best = list(zip(range(rows), pick))
+    return [(c, r) for r, c in best] if transposed else best
 
 
 def find_overall_index_fast(matrix: List[List[float]]) -> List[Tuple[int, int]]:
@@ -56,8 +53,8 @@ def find_overall_index_fast(matrix: List[List[float]]) -> List[Tuple[int, int]]:
     mat = np.array(matrix, dtype=np.float64)
     n_rows, n_cols = mat.shape
     k = min(n_rows, n_cols)
-    # 小规模用最优分配；异常大时回退贪心，避免组合爆炸
-    if max(n_rows, n_cols) <= 9:
+    # 小规模用最优分配；异常大时回退贪心，避免组合爆炸（阈值 7 → 最多 P(7,7)=5040 次）
+    if max(n_rows, n_cols) <= 7:
         index = _optimal_assignment(mat, n_rows, n_cols)
     else:
         index = _greedy_assignment(mat, n_cols, k)

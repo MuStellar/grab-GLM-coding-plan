@@ -12,11 +12,6 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        unsafeWindow
-// @connect      127.0.0.1
-// @connect      localhost
-// @connect      qcloud.com
-// @connect      captcha.qq.com
-// @connect      gtimg.com
 // @connect      *
 // @run-at       document-start
 // ==/UserScript==
@@ -598,7 +593,7 @@
   // 探测本地识别服务是否在线（开抢前预检，避免到验证码才发现没开）
   async function checkServiceHealth() {
     try {
-      await gmFetch(SERVICE_HEALTH_URL, { method: 'GET', timeout: 3000 });
+      await gmFetch(SERVICE_HEALTH_URL, { method: 'GET', timeout: HEALTH_CHECK_TIMEOUT_MS });
       return true;
     } catch (e) {
       return false;
@@ -620,7 +615,7 @@
   function scheduleHealthPoll() {
     if (healthTimer) { clearTimeout(healthTimer); healthTimer = null; }
     if (!isWatching) return;
-    const delay = lastHealthOk === false ? 2000 : 6000;
+    const delay = lastHealthOk === false ? HEALTH_POLL_DOWN_MS : HEALTH_POLL_OK_MS;
     healthTimer = setTimeout(() => { pollServiceHealth().then(scheduleHealthPoll); }, delay);
   }
 
@@ -664,6 +659,9 @@
   const SECOND_CLICK_DELAY_MS = 120;
   const DIALOG_RETRY_BASE_DELAY_MS = 350; // 已缩短，加速重试
   const DIALOG_RETRY_RANDOM_MS = 300;     // 已缩短
+  const HEALTH_CHECK_TIMEOUT_MS = 3000;   // 单次健康探测超时
+  const HEALTH_POLL_OK_MS = 6000;         // 服务正常时的轮询间隔
+  const HEALTH_POLL_DOWN_MS = 2000;       // 服务断开时的轮询间隔（更快恢复）
   const PRODUCT_MAP = {
     Lite: { month: 'product-02434c', quarter: 'product-b8ea38', year: 'product-70a804' },
     Pro: { month: 'product-1df3e1', quarter: 'product-fef82f', year: 'product-5643e6' },
@@ -693,6 +691,8 @@
   let lastCycleSwitchAt = 0;
   let lastStatusText = '';
   let lastRenderedStatusText = '';
+  let lastClockText = '';
+  let lastSubText = '';
   let retryCount = 0;
   const MAX_RETRY_COUNT = 300; // 安全阈值，避免死循环
 
@@ -892,23 +892,27 @@
     const now = Date.now();
     const targetMs = isWatching ? targetTimestamp : getTargetDate().getTime();
     const diff = targetMs - now;
+    let clockText;
     if (diff <= 0) {
-      clock.textContent = isWatching ? '抢购中…' : '00:00:00';
+      clockText = isWatching ? '抢购中…' : '00:00:00';
     } else {
       const h = Math.floor(diff / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
-      clock.textContent = `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+      clockText = `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
     }
+    // 该函数每 500ms 跑一次，仅在文本变化时写 DOM（复用状态栏同款 diff-before-write）
+    if (clockText !== lastClockText) { clock.textContent = clockText; lastClockText = clockText; }
     if (sub) {
       const t = new Date(targetMs);
-      const nowD = new Date(now);
-      const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
       let dayLabel;
-      if (isSameDay(t, nowD)) dayLabel = '今天';
-      else if (isSameDay(t, tomorrow)) dayLabel = '明天';
-      else dayLabel = `${t.getMonth() + 1}/${t.getDate()}`;
-      sub.textContent = `目标 ${dayLabel} ${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
+      if (isSameDay(t, new Date(now))) dayLabel = '今天';
+      else {
+        const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+        dayLabel = isSameDay(t, tomorrow) ? '明天' : `${t.getMonth() + 1}/${t.getDate()}`;
+      }
+      const subText = `目标 ${dayLabel} ${pad2(config.targetHour)}:${pad2(config.targetMinute)}:${pad2(config.targetSecond || 0)}`;
+      if (subText !== lastSubText) { sub.textContent = subText; lastSubText = subText; }
     }
   }
 
