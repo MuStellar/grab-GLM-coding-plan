@@ -21,8 +21,8 @@ CAPTCHA_WRAPPER_ID = "tcaptcha_transform_dy"
 CONFIG = {
     "target_plan": "Lite",      # Lite / Pro / Max
     "billing_cycle": "month",   # month / quarter / year
-    "target_hour": 2,          # 每天早上 10:00 放库存
-    "target_minute": 9,
+    "target_hour": 10,          # 每天早上 10:00 放库存
+    "target_minute": 0,
     "target_second": 0,
 }
 
