@@ -162,9 +162,35 @@ def _extract_captcha_info(page):
     }''')
 
 
-def handle_tencent_captcha(page):
+def _refresh_captcha(page):
+    """点验证码上的“换一张/刷新”按钮换一道新题。找到并点到返回 True，找不到返回 False。
+    用页内合成事件点击，和点选验证码同一套坐标系。"""
+    return page.evaluate('''() => {
+        const wrapper = document.getElementById('tcaptcha_transform_dy');
+        if (!wrapper) return false;
+        // 刷新按钮是 <img alt="刷新验证" aria-label="刷新验证" role="button">，class 是通用的
+        // unselectable（信息图标也用它），所以靠 aria-label/alt 精确定位，class 选择器只作兜底。
+        const selectors = [
+            'img[aria-label="刷新验证"]', '[aria-label="刷新验证"]',
+            '[aria-label*="刷新"]', '[alt*="刷新"]', '[title*="刷新"]',
+            '.tencent-captcha-dy__refresh', '[class*="refresh"]', '[class*="reload"]'
+        ];
+        let btn = null;
+        for (const s of selectors) { const e = wrapper.querySelector(s); if (e) { btn = e; break; } }
+        if (!btn) return false;
+        const r = btn.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const tgt = document.elementFromPoint(x, y) || btn;
+        const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y };
+        ['mousedown', 'mouseup', 'click'].forEach(t => tgt.dispatchEvent(new MouseEvent(t, init)));
+        return true;
+    }''')
+
+
+def handle_tencent_captcha(page, _refresh_left=4):
     """
-    处理腾讯点选验证码（tcaptcha）
+    处理腾讯点选验证码（tcaptcha）。识别不全（检出字数 < 题面字数）时，点验证码上的
+    “换一张”刷新按钮换一道新题再试，而不是拿残缺答案去提交、白白废一次。
     返回: True 处理成功，False 失败
     """
     try:
@@ -176,6 +202,7 @@ def handle_tencent_captcha(page):
         click_text = info.get("clickText")
         if click_text:
             print(f"题面文字: {click_text}")
+        required = len([c for c in click_text.replace(' ', '') if c.strip()]) if click_text else 0
 
         # 服务端下载图片：无 CORS/反爬限制，requests 直取即可
         resp = requests.get(info["imgUrl"], timeout=10)
@@ -184,6 +211,18 @@ def handle_tencent_captcha(page):
         plan = cap.run_dict(resp.content, click_text=click_text)
 
         points = plan.get("point") if plan else None
+
+        # 识别不全：YOLO 漏检了题面里的字（检出数 < 需要数）。点“换一张”换新题重试，
+        # 不提交残缺答案（提交必失败、还白耗一次重试）。换不动或重试用尽才放弃。
+        got = len(points) if points else 0
+        if required and got < required:
+            if _refresh_left > 0 and _refresh_captcha(page):
+                print(f"只识别到 {got}/{required} 个字，换一张重试（剩 {_refresh_left - 1} 次）")
+                time.sleep(0.8)
+                return handle_tencent_captcha(page, _refresh_left - 1)
+            print(f"只识别到 {got}/{required} 个字，无法换题/重试用尽，放弃本次")
+            return False
+
         if not points:
             print("模型未识别到点击目标")
             return False
