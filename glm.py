@@ -31,21 +31,6 @@ CYCLE_LABELS = {"month": "连续包月", "quarter": "连续包季", "year": "连
 # 目标时刻后这么久内打开 → 仍抢「当天」；超过则滚到「明天」。与油猴版 WATCH_GRACE_MS 一致。
 GRACE_MINUTES = 40
 
-# 把售罄/限购态改写成可买。智谱 batch-preview 的真实字段是 soldOut / canPurchase / forbidden，
-# 且 JSON 冒号后带空格（"soldOut": true），所以必须用容忍空白的正则——直接字符串替换匹配不到
-# 带空格的真实响应，是之前改写一直没生效的根因。
-_SOLD_OUT_TRUE = re.compile(r'("(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*)true')
-_ZERO_STOCK = re.compile(r'("stock"\s*:\s*)0(?![.\d])')
-_BLOCKED_PURCHASE = re.compile(r'("canPurchase"\s*:\s*)(?:null|false)')
-
-
-def neutralize_sold_out(body):
-    """把响应体里的售罄/限购字段改成可买，返回新字符串（没命中则原样返回）。"""
-    new = _SOLD_OUT_TRUE.sub(r'\1false', body)
-    new = _ZERO_STOCK.sub(r'\g<1>999', new)
-    new = _BLOCKED_PURCHASE.sub(r'\1true', new)
-    return new
-
 
 def resolve_target_dt(now=None):
     """返回本次要抢的绝对时间点。今天的目标时刻若已过去超过 GRACE_MINUTES（默认 40min），
@@ -72,40 +57,67 @@ def init(page):
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
     }''')
 
-    # 拦截所有 fetch/XHR 响应，按内容改写售罄数据（与油猴版一致）。油猴是劫持全局
-    # fetch/XHR，所有请求都过它；之前 glm.py 只拦 **/api/**，会漏掉路径不带 /api/ 的
-    # 接口（如 batch-preview），导致按钮一直是死的售罄态——这正是 py 灰、js 可点的原因。
-    # 这里改成拦所有请求：只处理 xhr/fetch 的 JSON，静态资源（图片/脚本/样式）直接放行。
-    def _handle_api(route):
-        req = route.request
-        # 限流检查：直接返回成功，放行抢购
-        if 'rate-limit/check' in req.url:
-            route.fulfill(status=200, content_type='application/json',
-                          body='{"code":0,"msg":"success","data":null,"success":true}')
-            return
-        # 非接口请求（图片/脚本/样式等）不碰，避免 route.fetch 拖慢加载
-        if req.resource_type not in ('xhr', 'fetch'):
-            route.continue_()
-            return
-        resp = None
-        try:
-            resp = route.fetch()
-            if 'json' in (resp.headers.get('content-type') or '').lower():
-                route.fulfill(response=resp, body=neutralize_sold_out(resp.text()))
-            else:
-                route.fulfill(response=resp)
-        except Exception as e:
-            print(f"接口改写失败，放行原响应: {e}")
-            # 已拿到响应就原样回，避免 continue_ 重发请求（防止重复下单）
-            if resp is not None:
-                try:
-                    route.fulfill(response=resp)
-                except Exception:
-                    pass
-            else:
-                route.continue_()
+    # 售罄/限购改写：注入页内 fetch/XHR 钩子（与油猴 glm.js 完全同一套机制），在浏览器内部
+    # 异步改写响应。不用 Playwright 的 page.route——它是同步服务端拦截，每个 route.fetch 串行
+    # 往返；实测一旦用它拦 batch-preview 这个套餐接口，请求就超时（“网络请求超时”）。页内钩子
+    # 异步、零额外往返，正是油猴版不超时、按钮能变可点的原因。
+    page.add_init_script(r'''(() => {
+      if (window.__glmNetHook) return;
+      window.__glmNetHook = true;
 
-    page.route('**/*', _handle_api)
+      function neutralizeSoldOut(text) {
+        const hasSoldOut = /"(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*true/.test(text);
+        const hasZeroStock = /"stock"\s*:\s*0(?![.\d])/.test(text);
+        const hasBlocked = /"canPurchase"\s*:\s*(?:null|false)/.test(text);
+        if (!hasSoldOut && !hasZeroStock && !hasBlocked) return null;
+        return text
+          .replace(/("(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*)true/g, '$1false')
+          .replace(/("stock"\s*:\s*)0(?![.\d])/g, '$1999')
+          .replace(/("canPurchase"\s*:\s*)(?:null|false)/g, '$1true');
+      }
+
+      const origFetch = window.fetch;
+      window.fetch = async function (...args) {
+        const input = args[0];
+        const url = typeof input === 'string' ? input : (input && input.url) || String(input || '');
+        if (url.includes('/api/biz/rate-limit/check')) {
+          return new Response(JSON.stringify({ code: 0, msg: 'success', data: null, success: true }),
+            { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        const resp = await origFetch.apply(this, args);
+        const ct = resp.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          try {
+            const rewritten = neutralizeSoldOut(await resp.clone().text());
+            if (rewritten !== null) {
+              return new Response(rewritten, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+            }
+          } catch (e) {}
+        }
+        return resp;
+      };
+
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (m, u, ...rest) { this.__glmUrl = u; return origOpen.call(this, m, u, ...rest); };
+      XMLHttpRequest.prototype.send = function (...a) {
+        this.addEventListener('readystatechange', function () {
+          if (this.readyState === 4 && this.status === 200) {
+            const ct = this.getResponseHeader('content-type') || '';
+            if (ct.includes('application/json')) {
+              try {
+                const rewritten = neutralizeSoldOut(this.responseText);
+                if (rewritten !== null) {
+                  Object.defineProperty(this, 'responseText', { get: () => rewritten });
+                  Object.defineProperty(this, 'response', { get: () => JSON.parse(rewritten) });
+                }
+              } catch (e) {}
+            }
+          }
+        });
+        return origSend.apply(this, a);
+      };
+    })();''')
 
 
 def _extract_captcha_info(page):
@@ -396,7 +408,11 @@ def main():
                 user_data_dir=PROFILE_DIR,
                 headless=False,
                 channel="chrome",      # 使用系统安装的 Chrome
-                args=["--disable-blink-features=AutomationControlled"],
+                # no_viewport：不强制固定视口，用真实窗口大小当视口（默认会锁 1280x720，
+                # 导致界面不占满窗口、最大化无效，且在带系统缩放的有头窗口下渲染与坐标错位、
+                # 合成点击点不准）。配合 --start-maximized 开局即最大化，行为对齐正常 Chrome。
+                no_viewport=True,
+                args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
             )
         except Exception as e:
             # 最常见的两种失败：没装系统 Chrome（channel=chrome 找不到二进制），
