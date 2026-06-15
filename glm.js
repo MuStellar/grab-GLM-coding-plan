@@ -34,6 +34,21 @@
   // 网络拦截层
   // ==========================================
 
+  // 把售罄/限购态改写成可买。智谱的 JSON 冒号后带空格（如 "soldOut": true），
+  // 正则必须容忍空白——之前用 /"soldOut":true/ 匹配不到带空格的真实响应，是改写一直没生效的根因。
+  // 实测 batch-preview 的真实字段是 soldOut / canPurchase / forbidden，不是 isSoldOut/stock 那些。
+  // 返回改写后的文本；没有可改的内容则返回 null。
+  function neutralizeSoldOut(text) {
+    const hasSoldOut = /"(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*true/.test(text);
+    const hasZeroStock = /"stock"\s*:\s*0(?![.\d])/.test(text);
+    const hasBlockedPurchase = /"canPurchase"\s*:\s*(?:null|false)/.test(text);
+    if (!hasSoldOut && !hasZeroStock && !hasBlockedPurchase) return null;
+    return text
+      .replace(/("(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*)true/g, '$1false')
+      .replace(/("stock"\s*:\s*)0(?![.\d])/g, '$1999')
+      .replace(/("canPurchase"\s*:\s*)(?:null|false)/g, '$1true');
+  }
+
   // 1. 绕过限流接口
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
@@ -53,14 +68,11 @@
     if (contentType.includes('application/json')) {
       const clone = response.clone();
       try {
-        let text = await clone.text();
-        if (text.includes('"isSoldOut":true') || text.includes('"disabled":true') || text.includes('"soldOut":true')) {
-          console.log('[Auto-GLM-1.7] 拦截售罄数据:', requestUrl);
-          text = text.replace(/"isSoldOut":true/g, '"isSoldOut":false')
-            .replace(/"disabled":true/g, '"disabled":false')
-            .replace(/"soldOut":true/g, '"soldOut":false')
-            .replace(/"stock":0/g, '"stock":999');
-          return new Response(text, {
+        const text = await clone.text();
+        const rewritten = neutralizeSoldOut(text);
+        if (rewritten !== null) {
+          console.log('[Auto-GLM-1.7] 改写售罄/限购数据:', requestUrl);
+          return new Response(rewritten, {
             status: response.status,
             statusText: response.statusText,
             headers: response.headers
@@ -86,15 +98,11 @@
         const contentType = this.getResponseHeader('content-type') || '';
         if (contentType.includes('application/json')) {
           try {
-            let text = this.responseText;
-            if (text.includes('"isSoldOut":true') || text.includes('"disabled":true') || text.includes('"soldOut":true')) {
-              console.log('[Auto-GLM-1.7] 拦截XHR售罄数据:', this._reqUrl);
-              text = text.replace(/"isSoldOut":true/g, '"isSoldOut":false')
-                .replace(/"disabled":true/g, '"disabled":false')
-                .replace(/"soldOut":true/g, '"soldOut":false')
-                .replace(/"stock":0/g, '"stock":999');
-              Object.defineProperty(this, 'responseText', { get: function () { return text; } });
-              Object.defineProperty(this, 'response', { get: function () { return JSON.parse(text); } });
+            const rewritten = neutralizeSoldOut(this.responseText);
+            if (rewritten !== null) {
+              console.log('[Auto-GLM-1.7] 改写XHR售罄/限购数据:', this._reqUrl);
+              Object.defineProperty(this, 'responseText', { get: function () { return rewritten; } });
+              Object.defineProperty(this, 'response', { get: function () { return JSON.parse(rewritten); } });
             }
           } catch (e) {
             console.log('[Auto-GLM-1.7] XHR拦截异常:', e.message);
@@ -706,7 +714,10 @@
   let lastClockText = '';
   let lastSubText = '';
   let retryCount = 0;
-  const MAX_RETRY_COUNT = 300; // 安全阈值，避免死循环
+  // 真正的"放弃"由 40 分钟时间窗口（WATCH_GRACE_MS / isTargetWindowExpired）决定。
+  // 这个计数只作兜底，防止极端情况下的紧致死循环——所以要足够大，别让它在 40 分钟内
+  // 先于时间窗口触发（旧值 300，几分钟就用光，导致没撑到 40 分钟就停了）。
+  const MAX_RETRY_COUNT = 100000;
 
   function clampNumber(value, min, max, fallback) {
     const next = Number(value);

@@ -31,6 +31,21 @@ CYCLE_LABELS = {"month": "连续包月", "quarter": "连续包季", "year": "连
 # 目标时刻后这么久内打开 → 仍抢「当天」；超过则滚到「明天」。与油猴版 WATCH_GRACE_MS 一致。
 GRACE_MINUTES = 40
 
+# 把售罄/限购态改写成可买。智谱 batch-preview 的真实字段是 soldOut / canPurchase / forbidden，
+# 且 JSON 冒号后带空格（"soldOut": true），所以必须用容忍空白的正则——直接字符串替换匹配不到
+# 带空格的真实响应，是之前改写一直没生效的根因。
+_SOLD_OUT_TRUE = re.compile(r'("(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*)true')
+_ZERO_STOCK = re.compile(r'("stock"\s*:\s*)0(?![.\d])')
+_BLOCKED_PURCHASE = re.compile(r'("canPurchase"\s*:\s*)(?:null|false)')
+
+
+def neutralize_sold_out(body):
+    """把响应体里的售罄/限购字段改成可买，返回新字符串（没命中则原样返回）。"""
+    new = _SOLD_OUT_TRUE.sub(r'\1false', body)
+    new = _ZERO_STOCK.sub(r'\g<1>999', new)
+    new = _BLOCKED_PURCHASE.sub(r'\1true', new)
+    return new
+
 
 def resolve_target_dt(now=None):
     """返回本次要抢的绝对时间点。今天的目标时刻若已过去超过 GRACE_MINUTES（默认 40min），
@@ -57,26 +72,28 @@ def init(page):
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
     }''')
 
-    # 拦截所有 /api/ 响应，按内容改写售罄数据（与油猴版一致）。
-    # 油猴是拦截全部 JSON；之前 glm.py 只盯 pay/preview，漏掉了卡片“暂时售罄”
-    # 那条接口，导致按钮一直是死的售罄态。这里改成只要响应里带售罄字段就改。
+    # 拦截所有 fetch/XHR 响应，按内容改写售罄数据（与油猴版一致）。油猴是劫持全局
+    # fetch/XHR，所有请求都过它；之前 glm.py 只拦 **/api/**，会漏掉路径不带 /api/ 的
+    # 接口（如 batch-preview），导致按钮一直是死的售罄态——这正是 py 灰、js 可点的原因。
+    # 这里改成拦所有请求：只处理 xhr/fetch 的 JSON，静态资源（图片/脚本/样式）直接放行。
     def _handle_api(route):
+        req = route.request
         # 限流检查：直接返回成功，放行抢购
-        if 'rate-limit/check' in route.request.url:
+        if 'rate-limit/check' in req.url:
             route.fulfill(status=200, content_type='application/json',
                           body='{"code":0,"msg":"success","data":null,"success":true}')
+            return
+        # 非接口请求（图片/脚本/样式等）不碰，避免 route.fetch 拖慢加载
+        if req.resource_type not in ('xhr', 'fetch'):
+            route.continue_()
             return
         resp = None
         try:
             resp = route.fetch()
-            body = resp.text()
-            if ('"isSoldOut":true' in body or '"disabled":true' in body
-                    or '"soldOut":true' in body or '"stock":0' in body):
-                body = (body.replace('"isSoldOut":true', '"isSoldOut":false')
-                            .replace('"disabled":true', '"disabled":false')
-                            .replace('"soldOut":true', '"soldOut":false')
-                            .replace('"stock":0', '"stock":999'))
-            route.fulfill(response=resp, body=body)
+            if 'json' in (resp.headers.get('content-type') or '').lower():
+                route.fulfill(response=resp, body=neutralize_sold_out(resp.text()))
+            else:
+                route.fulfill(response=resp)
         except Exception as e:
             print(f"接口改写失败，放行原响应: {e}")
             # 已拿到响应就原样回，避免 continue_ 重发请求（防止重复下单）
@@ -88,7 +105,7 @@ def init(page):
             else:
                 route.continue_()
 
-    page.route('**/api/**', _handle_api)
+    page.route('**/*', _handle_api)
 
 
 def _extract_captcha_info(page):
@@ -133,29 +150,6 @@ def _extract_captcha_info(page):
     }''')
 
 
-def _find_confirm_point(page):
-    """定位验证码确认按钮的中心坐标（按钮可能是 div，用坐标点击最稳）。"""
-    return page.evaluate('''() => {
-        const wrapper = document.getElementById('tcaptcha_transform_dy');
-        if (!wrapper) return null;
-        let el = wrapper.querySelector(
-            'a.tcaptcha-verify-btn, button.tcaptcha-verify-btn, .tcaptcha-verify-btn, ' +
-            '.tcaptcha-operation-btn, .tencent-captcha-dy__verify-btn, ' +
-            '.tencent-captcha-dy__verify-confirm-btn, a[class*="verify-btn"], ' +
-            'button[class*="verify-btn"], div[class*="confirm-btn"]');
-        if (!el) {
-            for (const c of wrapper.querySelectorAll('a, button, div, [role="button"]')) {
-                const t = (c.textContent || '').trim();
-                if (t === '确认' || t === '确定' || t === '提交' || t === '验证') { el = c; break; }
-            }
-        }
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        if (r.width < 10 || r.height < 10) return null;
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    }''')
-
-
 def handle_tencent_captcha(page):
     """
     处理腾讯点选验证码（tcaptcha）
@@ -191,21 +185,49 @@ def handle_tencent_captcha(page):
 
         time.sleep(0.5)
 
-        # 依次点击每个目标（plan['point'] 已按点击顺序排好）
+        # 仅用于日志：Python 侧按同一公式算一遍点位
         for i, p in enumerate(points):
-            click_x = box["x"] + p["x_rel"] * scale_x
-            click_y = box["y"] + p["y_rel"] * scale_y
-            print(f"  点击第 {i+1} 个目标: ({click_x:.0f}, {click_y:.0f})")
-            page.mouse.click(click_x, click_y)
-            time.sleep(0.3)
+            print(f"  点击第 {i+1} 个目标: "
+                  f"({box['x'] + p['x_rel'] * scale_x:.0f}, {box['y'] + p['y_rel'] * scale_y:.0f})")
 
-        # 点击确认按钮
-        confirm = _find_confirm_point(page)
-        if confirm:
-            page.mouse.click(confirm["x"], confirm["y"])
-            print("已点击确认按钮")
-        else:
-            print("未找到确认按钮（可能验证码已自动提交）")
+        # 实际点击在页面内用合成事件派发，和能成功的油猴版(glm.js dispatchRealClickAtPoint)完全一致。
+        # 之前用 page.mouse.click（CDP 真实鼠标）：在带系统缩放的有头 Chrome 上，CDP 视口坐标和
+        # 页面 getBoundingClientRect 的 CSS 像素会对不齐，点位整体偏移 → 腾讯判定点错而换题。
+        # 全程留在页面 DOM 坐标系里算坐标 + 派发事件，绕开这个换算问题。
+        result = page.evaluate('''async (data) => {
+            const { points, origW, origH } = data;
+            const wrapper = document.getElementById('tcaptcha_transform_dy');
+            if (!wrapper) return 'no-wrapper';
+            const imageArea = wrapper.querySelector('.tencent-captcha-dy__image-area');
+            const bg = (imageArea || wrapper).querySelector('.tencent-captcha-dy__verify-bg-img')
+                    || (imageArea || wrapper).querySelector('div[style*="background"]')
+                    || wrapper.querySelector('img');
+            if (!bg) return 'no-bg';
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+            const dispatchAt = (x, y) => {
+                const el = document.elementFromPoint(x, y);
+                if (!el) return;
+                const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y };
+                ['mousedown', 'mouseup', 'click'].forEach(t => el.dispatchEvent(new MouseEvent(t, init)));
+            };
+            const r = bg.getBoundingClientRect();
+            const sx = r.width / origW, sy = r.height / origH;
+            for (const p of points) {
+                await sleep(300);
+                dispatchAt(r.left + p.x_rel * sx, r.top + p.y_rel * sy);
+            }
+            await sleep(200);
+            const btn = wrapper.querySelector(
+                '.tencent-captcha-dy__verify-confirm-btn, .tencent-captcha-dy__verify-btn, ' +
+                '.tcaptcha-verify-btn, a[class*="verify-btn"], button[class*="verify-btn"], div[class*="confirm-btn"]');
+            if (btn) {
+                const b = btn.getBoundingClientRect();
+                dispatchAt(b.left + b.width / 2, b.top + b.height / 2);
+                return 'confirmed';
+            }
+            return 'no-confirm';
+        }''', {"points": points, "origW": orig_w, "origH": orig_h})
+        print("已点击确认按钮" if result == 'confirmed' else f"未点确认按钮({result})，可能已自动提交")
 
         print("验证码点击完成，已提交")
         return True
@@ -413,12 +435,16 @@ def main():
         print(f"目标时间: {day_label} {target_dt:%Y-%m-%d %H:%M:%S}（超过目标时刻 {GRACE_MINUTES} 分钟才打开则抢明天）")
 
         retry_count = 0
-        max_retry = 300
+        # 真正的"放弃"由 40 分钟时间窗口（deadline）决定，和油猴版 WATCH_GRACE_MS 对齐。
+        # max_retry 只作兜底防紧致死循环，要足够大，别在 40 分钟内先于时间窗口触发
+        # （旧值 300，到点后几分钟就用光，导致没撑到 40 分钟就停了）。
+        max_retry = 100000
+        deadline = target_dt + timedelta(minutes=GRACE_MINUTES)
         completed = False
         interrupted = False
 
         try:
-            while not completed and retry_count < max_retry:
+            while not completed and retry_count < max_retry and datetime.now() < deadline:
                 # 距目标时刻还有多少秒（负数=已到点）
                 diff = (target_dt - datetime.now()).total_seconds()
                 if diff > 60:
@@ -478,6 +504,8 @@ def main():
 
             if completed:
                 print("\n抢购流程完成！")
+            elif datetime.now() >= deadline:
+                print(f"\n已超过目标时刻 {GRACE_MINUTES} 分钟窗口，停止抢购")
             elif retry_count >= max_retry:
                 print(f"\n已达最大重试次数({max_retry})，停止")
         except KeyboardInterrupt:
