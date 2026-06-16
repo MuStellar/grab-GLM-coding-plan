@@ -29,11 +29,11 @@ CONFIG = {
 CYCLE_LABELS = {"month": "连续包月", "quarter": "连续包季", "year": "连续包年"}
 
 # 目标时刻后这么久内打开 → 仍抢「当天」；超过则滚到「明天」。与油猴版 WATCH_GRACE_MS 一致。
-GRACE_MINUTES = 40
+GRACE_MINUTES = 60
 
 
 def resolve_target_dt(now=None):
-    """返回本次要抢的绝对时间点。今天的目标时刻若已过去超过 GRACE_MINUTES（默认 40min），
+    """返回本次要抢的绝对时间点。今天的目标时刻若已过去超过 GRACE_MINUTES（默认 60min），
     就滚到明天同一时刻；否则锁当天（当天该时刻已过、但在宽限内则立即开抢）。"""
     now = now or datetime.now()
     target = now.replace(hour=CONFIG["target_hour"], minute=CONFIG["target_minute"],
@@ -501,9 +501,9 @@ def main():
         print(f"目标时间: {day_label} {target_dt:%Y-%m-%d %H:%M:%S}（超过目标时刻 {GRACE_MINUTES} 分钟才打开则抢明天）")
 
         retry_count = 0
-        # 真正的"放弃"由 40 分钟时间窗口（deadline）决定，和油猴版 WATCH_GRACE_MS 对齐。
-        # max_retry 只作兜底防紧致死循环，要足够大，别在 40 分钟内先于时间窗口触发
-        # （旧值 300，到点后几分钟就用光，导致没撑到 40 分钟就停了）。
+        # 真正的"放弃"由 GRACE_MINUTES 时间窗口（deadline）决定，和油猴版 WATCH_GRACE_MS 对齐。
+        # max_retry 只作兜底防紧致死循环，要足够大，别在该窗口内先于时间窗口触发
+        # （旧值 300，到点后几分钟就用光，导致没撑到窗口结束就停了）。
         max_retry = 100000
         deadline = target_dt + timedelta(minutes=GRACE_MINUTES)
         completed = False

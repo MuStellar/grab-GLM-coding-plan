@@ -33,9 +33,20 @@ Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 
 启动，下述方式二选一：
 
 - 一键启动：Windows 双击 `start.cmd`；Linux、macOS 运行 `./start.sh`。然后输入 `1`。
-- 命令行（进阶）：Linux、macOS 用 `python3`，并先建好虚拟环境再装依赖（Debian、Ubuntu 不在虚拟环境里直接 `pip install` 会报 externally-managed-environment）。装好依赖后运行 `python glm.py`。
+- 命令行（进阶）：在虚拟环境里装依赖、跑脚本。Linux、macOS：
 
-方式一要弹出浏览器窗口，需在带桌面的环境运行（WSL 需 WSLg，纯命令行服务器跑不了）。一键启动会自动装好浏览器；Linux 首次运行还会用 sudo 补装浏览器所需系统库，按提示输入密码即可。命令行方式需自行运行 `python -m playwright install chromium`，Linux 再加 `sudo python -m playwright install-deps chromium`。
+  ```
+  python3 -m venv .venv
+  .venv/bin/pip install -r requirements.txt
+  .venv/bin/python glm.py
+  ```
+
+  必须用 `.venv` 里的 Python；直接 `python3 glm.py` 会落到系统环境、报缺 playwright，Debian、Ubuntu 不建虚拟环境直接 `pip install` 还会报 externally-managed-environment。Windows 把 `python3` 换成 `python`、`.venv/bin/` 换成 `.venv\Scripts\`。
+
+方式一要弹出浏览器窗口，需在带桌面的环境运行（WSL 需 WSLg，纯命令行服务器跑不了）。脚本优先用你装的 Google Chrome，找不到再退回 Playwright 自带的 Chromium。
+
+- Windows、macOS：按上面环境准备装好 Google Chrome 就能直接用，无需额外装浏览器。
+- Linux：一般没有系统 Chrome。用 `./start.sh` 选 1 会自动装 Chromium，首次还会用 sudo 补装所需系统库，按提示输入密码即可。自己敲命令跑（不走 start.sh）则需先 `.venv/bin/python -m playwright install chromium`，再 `sudo .venv/bin/python -m playwright install-deps chromium`。
 
 启动后：
 
@@ -54,7 +65,7 @@ Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 
 | targetMinute | 目标分 | 0-59 |
 | targetSecond | 目标秒 | 0-59 |
 
-时间规则：脚本只看 `CONFIG` 里的时分秒。当天目标时刻（默认10:00:00）内 40 分钟内打开，抢当天（已过点就立即开抢，正好赶回流）。10:40:00 后打开脚本将自动改抢明天同一目标时刻。
+时间规则：脚本只看 `CONFIG` 里的时分秒。当天目标时刻（默认10:00:00）后 60 分钟内打开，抢当天（已过点就立即开抢，正好赶回流）。11:00:00 后打开脚本将自动改抢明天同一目标时刻。
 
 ### 方式二：油猴脚本
 
@@ -63,7 +74,15 @@ Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 
 第 1 步，开识别服务（**保持开着**），下述方式二选一：
 
 - 一键启动：Windows 双击 `start.cmd`；Linux、macOS 运行 `./start.sh`。然后输入 `2`。
-- 命令行（进阶）：Linux、macOS 用 `python3`，并先建好虚拟环境再装依赖（同上，Debian、Ubuntu 直接 `pip install` 会报 externally-managed-environment）。装好依赖后运行 `python service.py`。
+- 命令行（进阶）：同方式一，在虚拟环境里跑。Linux、macOS：
+
+  ```
+  python3 -m venv .venv
+  .venv/bin/pip install -r requirements.txt
+  .venv/bin/python service.py
+  ```
+
+  必须用 `.venv` 里的 Python，别直接 `python3 service.py`。Windows 把 `python3` 换成 `python`、`.venv/bin/` 换成 `.venv\Scripts\`。
 
 服务地址是 `http://127.0.0.1:8123`。抢购期间别关这个窗口，关了就识别不了验证码。
 
@@ -85,8 +104,8 @@ Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 
 ## 怎么退出
 
 - 识别服务（service.py）：在它的终端窗口按 Ctrl+C，或直接关窗口。抢购没结束别关。
-- 油猴脚本：点面板「停止监听」，或关掉、刷新页面。抢到、超过 40 分钟、点击太多次时也会自动停。
-- Playwright（glm.py）：抢到后脚本会停在支付页、保持浏览器开着，扫完码再关窗口或按 Ctrl+C。注意按 Ctrl+C 会顺手把这个浏览器一起关掉，所以扫完码再退。没抢到时，超过目标时刻 40 分钟会自动停。
+- 油猴脚本：点面板「停止监听」，或关掉、刷新页面。抢到、超过 60 分钟、点击太多次时也会自动停。
+- Playwright（glm.py）：抢到后脚本会停在支付页、保持浏览器开着，扫完码再关窗口或按 Ctrl+C。注意按 Ctrl+C 会顺手把这个浏览器一起关掉，所以扫完码再退。没抢到时，超过目标时刻 60 分钟会自动停。
 
 ## 相比原项目新增功能
 
@@ -110,7 +129,7 @@ Python 脚本 [glm.py](glm.py)：
 - 自动检测登录，登录后自动继续
 - 改写售罄数据、绕过限流，与油猴版一致
 - 支付弹窗按可见性判定，避免隐藏节点误报停机
-- 到点后持续重试，直到抢到或超过目标时刻 40 分钟才停
+- 到点后持续重试，直到抢到或超过目标时刻 60 分钟才停
 - 抢到后停止点击并保持浏览器打开，方便扫码
 
 识别服务 API：

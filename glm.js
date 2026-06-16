@@ -690,7 +690,7 @@
   // ==========================================
 
   const STORAGE_KEY = 'glm-simple-config-v16';
-  const WATCH_GRACE_MS = 40 * 60 * 1000;
+  const WATCH_GRACE_MS = 60 * 60 * 1000;
   const CYCLE_SETTLE_MS = 350;
   const SECOND_CLICK_DELAY_MS = 120;
   const DIALOG_RETRY_BASE_DELAY_MS = 350; // 已缩短，加速重试
@@ -731,9 +731,9 @@
   let lastSubText = '';
   let retryCount = 0;
   let lastDiagAt = 0;   // 诊断日志节流时间戳
-  // 真正的"放弃"由 40 分钟时间窗口（WATCH_GRACE_MS / isTargetWindowExpired）决定。
-  // 这个计数只作兜底，防止极端情况下的紧致死循环——所以要足够大，别让它在 40 分钟内
-  // 先于时间窗口触发（旧值 300，几分钟就用光，导致没撑到 40 分钟就停了）。
+  // 真正的"放弃"由 WATCH_GRACE_MS 时间窗口（isTargetWindowExpired）决定。
+  // 这个计数只作兜底，防止极端情况下的紧致死循环——所以要足够大，别让它在该窗口内
+  // 先于时间窗口触发（旧值 300，几分钟就用光，导致没撑到窗口结束就停了）。
   const MAX_RETRY_COUNT = 100000;
 
   function clampNumber(value, min, max, fallback) {
