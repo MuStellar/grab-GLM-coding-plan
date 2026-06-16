@@ -63,8 +63,26 @@ echo "   2) 启动验证码识别服务（配合油猴脚本 glm.js 使用）"
 echo
 read -r -p "请输入 1 或 2 后回车: " MODE
 
+# 方式一要弹浏览器：装好 Playwright 自带 Chromium，再补浏览器所需系统库。
+# 装 Chromium 不用 sudo（已装会秒过）；系统库缺了浏览器起不来，Linux 上需 sudo apt。
+ensure_browser() {
+    echo "正在检查浏览器（Playwright Chromium）..."
+    "$VPY" -m playwright install chromium
+    # 只有 Linux 才需要补系统库；--dry-run 缺包时退出码非 0，缺了才动 sudo。
+    if [ "$(uname)" = "Linux" ] && command -v apt >/dev/null 2>&1; then
+        if ! "$VPY" -m playwright install-deps --dry-run chromium >/dev/null 2>&1; then
+            echo "缺少浏览器运行所需系统库，自动安装（需要 sudo 密码）..."
+            if ! sudo "$VPY" -m playwright install-deps chromium; then
+                echo "[警告] 自动安装系统库失败，浏览器可能起不来。可手动运行："
+                echo "       sudo $VPY -m playwright install-deps chromium"
+            fi
+        fi
+    fi
+}
+
 case "$MODE" in
     1)
+        ensure_browser
         echo
         echo "启动 Playwright 抢购脚本 glm.py ..."
         "$VPY" glm.py

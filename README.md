@@ -33,9 +33,9 @@ Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 
 启动，下述方式二选一：
 
 - 一键启动：Windows 双击 `start.cmd`；Linux、macOS 运行 `./start.sh`。然后输入 `1`。
-- 命令行：先 `pip install -r requirements.txt`，再 `python glm.py`。
+- 命令行（进阶）：Linux、macOS 用 `python3`，并先建好虚拟环境再装依赖（Debian、Ubuntu 不在虚拟环境里直接 `pip install` 会报 externally-managed-environment）。装好依赖后运行 `python glm.py`。
 
-方式一要弹出浏览器窗口，需在带桌面的环境运行，并装好 Google Chrome（WSL 需 WSLg）。缺 Chrome 时按脚本提示运行 `playwright install chrome`。Linux 上若浏览器起不来，再补一句 `sudo playwright install-deps`。
+方式一要弹出浏览器窗口，需在带桌面的环境运行（WSL 需 WSLg，纯命令行服务器跑不了）。一键启动会自动装好浏览器；Linux 首次运行还会用 sudo 补装浏览器所需系统库，按提示输入密码即可。命令行方式需自行运行 `python -m playwright install chromium`，Linux 再加 `sudo python -m playwright install-deps chromium`。
 
 启动后：
 
@@ -63,7 +63,7 @@ Debian/Ubuntu 用户注意：系统默认不带 `python3-venv` 包，`start.sh` 
 第 1 步，开识别服务（**保持开着**），下述方式二选一：
 
 - 一键启动：Windows 双击 `start.cmd`；Linux、macOS 运行 `./start.sh`。然后输入 `2`。
-- 命令行：先 `pip install -r requirements.txt`，再 `python service.py`。
+- 命令行（进阶）：Linux、macOS 用 `python3`，并先建好虚拟环境再装依赖（同上，Debian、Ubuntu 直接 `pip install` 会报 externally-managed-environment）。装好依赖后运行 `python service.py`。
 
 服务地址是 `http://127.0.0.1:8123`。抢购期间别关这个窗口，关了就识别不了验证码。
 

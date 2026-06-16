@@ -38,6 +38,8 @@
   // 正则必须容忍空白——之前用 /"soldOut":true/ 匹配不到带空格的真实响应，是改写一直没生效的根因。
   // 实测 batch-preview 的真实字段是 soldOut / canPurchase / forbidden，不是 isSoldOut/stock 那些。
   // 返回改写后的文本；没有可改的内容则返回 null。
+  // rewriteHitCount：累计改写命中次数，供诊断日志判断“卡灰”时改写到底有没有在生效。
+  let rewriteHitCount = 0;
   function neutralizeSoldOut(text) {
     const hasSoldOut = /"(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*true/.test(text);
     const hasZeroStock = /"stock"\s*:\s*0(?![.\d])/.test(text);
@@ -71,6 +73,7 @@
         const text = await clone.text();
         const rewritten = neutralizeSoldOut(text);
         if (rewritten !== null) {
+          rewriteHitCount++;
           console.log('[Auto-GLM-1.7] 改写售罄/限购数据:', requestUrl);
           return new Response(rewritten, {
             status: response.status,
@@ -98,11 +101,24 @@
         const contentType = this.getResponseHeader('content-type') || '';
         if (contentType.includes('application/json')) {
           try {
-            const rewritten = neutralizeSoldOut(this.responseText);
+            // responseType 为 'json'/'blob' 等时访问 responseText 会抛 InvalidStateError，
+            // 旧代码被 catch 吞掉 → 这类响应静默漏改写（间歇卡灰的可能原因）。
+            // 这里按 responseType 取原文：text/'' 用 responseText，json 用 response 序列化。
+            const rt = this.responseType;
+            let raw = null;
+            if (rt === '' || rt === 'text') raw = this.responseText;
+            else if (rt === 'json' && this.response != null) raw = JSON.stringify(this.response);
+            const rewritten = raw == null ? null : neutralizeSoldOut(raw);
             if (rewritten !== null) {
-              console.log('[Auto-GLM-1.7] 改写XHR售罄/限购数据:', this._reqUrl);
-              Object.defineProperty(this, 'responseText', { get: function () { return rewritten; } });
-              Object.defineProperty(this, 'response', { get: function () { return JSON.parse(rewritten); } });
+              rewriteHitCount++;
+              console.log('[Auto-GLM-1.7] 改写XHR售罄/限购数据:', this._reqUrl, '(responseType=' + (rt || 'text') + ')');
+              const parsed = JSON.parse(rewritten);
+              if (rt === '' || rt === 'text') {
+                Object.defineProperty(this, 'responseText', { get: () => rewritten });
+                Object.defineProperty(this, 'response', { get: () => rewritten });
+              } else {
+                Object.defineProperty(this, 'response', { get: () => parsed });
+              }
             }
           } catch (e) {
             console.log('[Auto-GLM-1.7] XHR拦截异常:', e.message);
@@ -714,6 +730,7 @@
   let lastClockText = '';
   let lastSubText = '';
   let retryCount = 0;
+  let lastDiagAt = 0;   // 诊断日志节流时间戳
   // 真正的"放弃"由 40 分钟时间窗口（WATCH_GRACE_MS / isTargetWindowExpired）决定。
   // 这个计数只作兜底，防止极端情况下的紧致死循环——所以要足够大，别让它在 40 分钟内
   // 先于时间窗口触发（旧值 300，几分钟就用光，导致没撑到 40 分钟就停了）。
@@ -769,6 +786,15 @@
       logBox.innerHTML = `<div>[${time}] ${escapeHtml(msg)}</div>` + logBox.innerHTML;
       if (logBox.children.length > 50) logBox.lastElementChild.remove();
     }
+  }
+
+  // 卡灰诊断：到点后若迟迟没进展，每 ~1.5s 打一条按钮状态，便于下次抢购定位是
+  // “没找到按钮”（售罄渲染成非按钮）还是“点了但 React 仍按售罄态拦截”。
+  function diag(msg) {
+    const now = Date.now();
+    if (now - lastDiagAt < 1500) return;
+    lastDiagAt = now;
+    log(`诊断｜${msg}（累计改写命中 ${rewriteHitCount} 次）`);
   }
 
   function normalizeText(text) {
@@ -1068,10 +1094,17 @@
     const button = findBuyButton(card);
 
     if (!button) {
+       // 模式 A：售罄时页面可能把按钮渲染成非 <button> 元素，findBuyButton 找不到 → 一直不点。
+       diag(`未找到购买按钮（卡片${card ? '存在' : '缺失'}，售罄可能渲染成非按钮元素）`);
        updateStatus('已到点，等待按钮渲染');
        scheduleNextTick();
        return;
     }
+
+    // 模式 B：按钮找到了但处于售罄/禁用态——下面会强制 enable 再点；若点了仍不弹验证码，
+    // 多半是 React 内部仍按售罄态拦截（改写没在点击那一刻生效）。
+    const beforeState = getButtonState(button);
+    if (beforeState.disabled) diag(`按钮存在但禁用 text="${beforeState.text}"，已强制点击`);
 
     // 触发点击购买按钮
     const clicked = await triggerBuyButton(button);

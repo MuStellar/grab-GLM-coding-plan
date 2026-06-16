@@ -442,28 +442,39 @@ def main():
     with sync_playwright() as p:
         # 用项目专用配置目录（非日常主配置），避免 Chrome 进程接管导致卡死
         print(f"[诊断] 使用配置目录: {PROFILE_DIR}")
-        try:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
-                headless=False,
-                channel="chrome",      # 使用系统安装的 Chrome
-                # no_viewport：不强制固定视口，用真实窗口大小当视口（默认会锁 1280x720，
-                # 导致界面不占满窗口、最大化无效，且在带系统缩放的有头窗口下渲染与坐标错位、
-                # 合成点击点不准）。配合 --start-maximized 开局即最大化，行为对齐正常 Chrome。
-                no_viewport=True,
-                args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
-            )
-        except Exception as e:
-            # 最常见的两种失败：没装系统 Chrome（channel=chrome 找不到二进制），
-            # 或没有图形界面（headless=False 在纯命令行环境起不来）。给一句能照做的提示，
-            # 别让用户对着一长串 Playwright traceback 发懵。
-            print("\n[错误] 启动 Chrome 失败：", e)
+        # 先用系统安装的 Google Chrome（channel=chrome，Windows/macOS 多数自带），
+        # 找不到再回退到 Playwright 自带的 Chromium（Linux 上常见，免装系统 Chrome）。
+        # no_viewport：不强制固定视口，用真实窗口大小当视口（默认会锁 1280x720，
+        # 导致界面不占满窗口、最大化无效，且在带系统缩放的有头窗口下渲染与坐标错位、
+        # 合成点击点不准）。配合 --start-maximized 开局即最大化，行为对齐正常 Chrome。
+        common_args = ["--disable-blink-features=AutomationControlled", "--start-maximized"]
+        attempts = [
+            {"channel": "chrome", "args": common_args},
+            # 回退到自带 Chromium。WSL/容器里常缺沙箱权限，加 --no-sandbox 更稳。
+            {"args": common_args + ["--no-sandbox"]},
+        ]
+        context = None
+        last_err = None
+        for opt in attempts:
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=PROFILE_DIR, headless=False, no_viewport=True, **opt
+                )
+                break
+            except Exception as e:
+                last_err = e
+        if context is None:
+            # 两种常见失败：没有可用浏览器，或没有图形界面（headless=False 起不来）。
+            # 给几句能照做的提示，别让用户对着一长串 Playwright traceback 发懵。
+            print("\n[错误] 启动浏览器失败：", last_err)
             print("可能原因和解法：")
-            print("  1. 没装 Google Chrome —— 装好系统 Chrome，或运行：")
-            print("       playwright install chrome")
-            print("  2. 没有图形界面 —— 本脚本要弹出浏览器窗口，需在带桌面的环境运行")
+            print("  1. 没有可用浏览器 —— 装 Google Chrome，或装 Playwright 自带 Chromium：")
+            print("       python -m playwright install chromium   # Linux/macOS 用 python3")
+            print("     （用一键脚本 start.sh 选 1 会自动装好，无需手动敲）")
+            print("  2. Linux 缺系统库 —— 运行：")
+            print("       sudo python -m playwright install-deps chromium")
+            print("  3. 没有图形界面 —— 本脚本要弹出浏览器窗口，需在带桌面的环境运行")
             print("     （WSL 需 WSLg；纯命令行服务器跑不了）。")
-            print("  3. Linux 缺系统库 —— 运行：sudo playwright install-deps")
             return
         # 用新标签页打开 glm-coding——未登录时网站会在新标签里自动弹出登录框，
         # 这正是想保留的体验。顺手关掉启动自带的空白初始页，避免多一个无用标签。
