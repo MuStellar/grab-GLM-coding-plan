@@ -187,17 +187,56 @@ def _refresh_captcha(page):
     }''')
 
 
+# 记住上一题的背景图 URL：换题/重试时必须等到背景图换成新图再提取，
+# 否则会拿旧图坐标点在新图上（换题后第一次 100% 点错的根因）。
+_last_captcha_img_url = None
+
+
+def _get_captcha_img_url(page):
+    """只取验证码背景图 URL（轻量，用于轮询是否已换成新图）。"""
+    return page.evaluate(r'''() => {
+        const wrapper = document.getElementById('tcaptcha_transform_dy');
+        if (!wrapper) return null;
+        const area = wrapper.querySelector('.tencent-captcha-dy__image-area') || wrapper;
+        const bg = area.querySelector('.tencent-captcha-dy__verify-bg-img')
+               || area.querySelector('div[style*="background"]');
+        if (bg) {
+            const m = (bg.getAttribute('style') || '').match(/url\(["']?(.+?)["']?\)/);
+            if (m) return m[1];
+        }
+        const img = wrapper.querySelector('img');
+        return (img && img.src && !img.src.startsWith('data:')) ? img.src : null;
+    }''')
+
+
+def _wait_fresh_captcha_image(page, prev_url, timeout=3.0):
+    """等到背景图就绪、且与上一题不同再返回（换题后避免拿旧图坐标）；超时则用当前图兜底。"""
+    deadline = time.time() + timeout
+    cur = None
+    while time.time() < deadline:
+        cur = _get_captcha_img_url(page)
+        if cur and (prev_url is None or cur != prev_url):
+            time.sleep(0.2)  # 让新图的尺寸/DOM 再稳一拍
+            return cur
+        time.sleep(0.1)
+    return cur
+
+
 def handle_tencent_captcha(page, _refresh_left=4):
     """
     处理腾讯点选验证码（tcaptcha）。识别不全（检出字数 < 题面字数）时，点验证码上的
     “换一张”刷新按钮换一道新题再试，而不是拿残缺答案去提交、白白废一次。
     返回: True 处理成功，False 失败
     """
+    global _last_captcha_img_url
     try:
+        # 换题/重试后，先等背景图换成与上次处理过的不同的新图，避免拿旧图坐标点错。
+        _wait_fresh_captcha_image(page, _last_captcha_img_url)
         info = _extract_captcha_info(page)
         if not info or not info.get("imgUrl"):
             print("未找到验证码背景图")
             return False
+        _last_captcha_img_url = info["imgUrl"]   # 记录本次实际处理的图
 
         click_text = info.get("clickText")
         if click_text:
