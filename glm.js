@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7
+// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7.1
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.7.1
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
 // @author       Codex
 // @match        *://bigmodel.cn/glm-coding*
@@ -40,6 +40,24 @@
   // 返回改写后的文本；没有可改的内容则返回 null。
   // rewriteHitCount：累计改写命中次数，供诊断日志判断“卡灰”时改写到底有没有在生效。
   let rewriteHitCount = 0;
+  let rateLimitBypassCount = 0;   // 限流接口被拦截放行的次数
+  let lastSniffAt = 0;            // 嗅探日志节流时间戳
+
+  // 嗅探：把“抢购人数过多/请刷新/限流”相关响应的原文打到面板，定位这状态的真实来源。
+  // 我们手上的接口文档没覆盖“限流态”，必须抓一次真身才能精确改写。url 已去掉 query。
+  function sniffBusyResponse(url, status, bodyText) {
+    const text = String(bodyText || '');
+    const looksBusy = /人数过多|请刷新|限流|忙|busy|rateLimit|429/i.test(text) || status === 429;
+    const isKeyApi = /batch-preview|rate-limit|ratelimit|pay\/preview/i.test(url);
+    if (!looksBusy && !isKeyApi) return;
+    const now = Date.now();
+    if (now - lastSniffAt < 700) return;   // 节流，避免刷屏
+    lastSniffAt = now;
+    const shortUrl = url.split('?')[0].split('/').slice(-3).join('/');
+    const snip = text.length > 260 ? text.slice(0, 260) + '…' : text;
+    log(`嗅探｜${shortUrl} status=${status}｜${snip}`);
+  }
+
   function neutralizeSoldOut(text) {
     const hasSoldOut = /"(?:isSoldOut|disabled|soldOut|isLimitBuy|isServerBusy|forbidden)"\s*:\s*true/.test(text);
     const hasZeroStock = /"stock"\s*:\s*0(?![.\d])/.test(text);
@@ -51,13 +69,25 @@
       .replace(/("canPurchase"\s*:\s*)(?:null|false)/g, '$1true');
   }
 
+  // batch-preview 限流自动重试参数：服务器忙时回 {code:555,success:false,data:null}，
+  // 页面据此把按钮渲染成“抢购人数过多，请刷新再试”。我们替页面把同一请求快速重试，
+  // 拿到 success 的响应再回给页面，抓住服务器恢复/放量的瞬间。
+  const BATCH_PREVIEW_BUSY_RETRY = 6;        // 单次请求最多额外重试几次
+  const BATCH_PREVIEW_RETRY_DELAY_MS = 180;  // 每次重试间隔
+  function looksBusyBody(t) {
+    return /"success"\s*:\s*false/.test(t) || /"code"\s*:\s*5\d\d/.test(t) ||
+           /系统繁忙|人数过多|请稍后|请刷新/.test(t);
+  }
+
   // 1. 绕过限流接口
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     const [input] = args;
     const requestUrl = typeof input === 'string' ? input : input?.url || String(input || '');
-    if (requestUrl.includes('/api/biz/rate-limit/check')) {
-      console.log('[Auto-GLM-1.7] 拦截限流检查，强制放行');
+    // 放宽限流接口匹配：之前只认死路径 /api/biz/rate-limit/check，万一真实路径有出入就漏拦。
+    if (/rate-?limit/i.test(requestUrl) && /check|verify|pass/i.test(requestUrl)) {
+      rateLimitBypassCount++;
+      log(`拦截限流检查并强制放行（累计 ${rateLimitBypassCount} 次）: ${requestUrl.split('?')[0].split('/').slice(-2).join('/')}`);
       return new Response(JSON.stringify({
         code: 0, msg: 'success', data: null, success: true
       }), {
@@ -65,12 +95,33 @@
         headers: { 'content-type': 'application/json' }
       });
     }
-    const response = await originalFetch.apply(this, args);
+    let response = await originalFetch.apply(this, args);
+
+    // batch-preview 限流自动重试：忙就用同一请求重发，拿到 success 的真实响应再回给页面。
+    // （若整段时间服务器都繁忙，谁也买不到——官网对所有人也是这个提示。）
+    if (/batch-preview/i.test(requestUrl)) {
+      for (let i = 0; i <= BATCH_PREVIEW_BUSY_RETRY; i++) {
+        let body = '';
+        try { body = await response.clone().text(); } catch (e) {}
+        sniffBusyResponse(requestUrl, response.status, body);
+        if (!looksBusyBody(body)) break;
+        if (i === BATCH_PREVIEW_BUSY_RETRY) break;
+        if (i === 0) {
+          const codeM = body.match(/"code"\s*:\s*(\d+)/);
+          log(`batch-preview 限流(code=${codeM ? codeM[1] : '?'})，替页面自动重试抢窗口…`);
+        }
+        await sleep(BATCH_PREVIEW_RETRY_DELAY_MS);
+        response = await originalFetch.apply(this, args);
+      }
+    } else if (/rate-?limit|pay\/preview/i.test(requestUrl) || response.status === 429) {
+      // 其它关键接口/疑似限流响应做嗅探取证（含非 json、非 200，如 429），不改写只记录。
+      try { sniffBusyResponse(requestUrl, response.status, await response.clone().text()); } catch (e) {}
+    }
+
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      const clone = response.clone();
       try {
-        const text = await clone.text();
+        const text = await response.clone().text();
         const rewritten = neutralizeSoldOut(text);
         if (rewritten !== null) {
           rewriteHitCount++;
@@ -97,7 +148,16 @@
   };
   XMLHttpRequest.prototype.send = function (...args) {
     this.addEventListener('readystatechange', function () {
-      if (this.readyState === 4 && this.status === 200) {
+      if (this.readyState !== 4) return;
+      // 先嗅探取证：覆盖非 200（如 429）和非 json，定位“抢购人数过多”真身。
+      try {
+        const rt0 = this.responseType;
+        let raw0 = null;
+        if (rt0 === '' || rt0 === 'text') raw0 = this.responseText;
+        else if (rt0 === 'json' && this.response != null) raw0 = JSON.stringify(this.response);
+        if (raw0 != null) sniffBusyResponse(this._reqUrl || '', this.status, raw0);
+      } catch (e) {}
+      if (this.status === 200) {
         const contentType = this.getResponseHeader('content-type') || '';
         if (contentType.includes('application/json')) {
           try {
@@ -692,6 +752,9 @@
   const STORAGE_KEY = 'glm-simple-config-v16';
   const WATCH_GRACE_MS = 60 * 60 * 1000;
   const CYCLE_SETTLE_MS = 350;
+  const BUSY_RELOAD_THROTTLE_MS = 1500;          // 系统繁忙时两次刷新的最小间隔（越小越激进）
+  const WATCH_RESUME_KEY = 'glm-watch-resume-v16'; // 刷新后自动续监听的标记
+  const LAST_RELOAD_KEY = 'glm-last-reload-v16';   // 上次刷新时间戳（跨刷新节流）
   const SECOND_CLICK_DELAY_MS = 120;
   const DIALOG_RETRY_BASE_DELAY_MS = 350; // 已缩短，加速重试
   const DIALOG_RETRY_RANDOM_MS = 300;     // 已缩短
@@ -844,6 +907,21 @@
     lastCycleSwitchAt = Date.now();
     dispatchRealClick(tab.querySelector('.switch-tab-item-content') || tab);
     return false;
+  }
+
+  // batch-preview 返回 555 系统繁忙时 data 为 null，无字段可改写，页面也不会自己重拉，
+  // 只能刷新整页拿一份新的售卖态（实战脚本 mumumi v9.3 同思路）。带节流防刷新风暴，
+  // 并落一个续监听标记，刷新后自动续上（见 maybeAutoResume）。
+  function reloadForFreshPreview() {
+    let last = 0;
+    try { last = Number(localStorage.getItem(LAST_RELOAD_KEY)) || 0; } catch (e) {}
+    if (Date.now() - last < BUSY_RELOAD_THROTTLE_MS) return;
+    try {
+      localStorage.setItem(LAST_RELOAD_KEY, String(Date.now()));
+      localStorage.setItem(WATCH_RESUME_KEY, String(Date.now()));
+    } catch (e) {}
+    log('系统繁忙(batch-preview 555)，刷新页面重拉售卖态…');
+    location.reload();
   }
 
   function findPlanCard(planName) {
@@ -1101,10 +1179,21 @@
        return;
     }
 
-    // 模式 B：按钮找到了但处于售罄/禁用态——下面会强制 enable 再点；若点了仍不弹验证码，
-    // 多半是 React 内部仍按售罄态拦截（改写没在点击那一刻生效）。
+    // 模式 B：按钮找到但禁用。
+    //  - 系统繁忙(batch-preview 555 → "抢购人数过多/请刷新")：data 为 null 无字段可改，
+    //    页面加载后不会自己重拉，唯一出路是刷新整页再请求一次 batch-preview，反复刷新去
+    //    抢服务器返回 200 的瞬间（实战成功脚本 mumumi 同打法）。刷新后自动续监听。
+    //  - 真售罄：neutralize 钩子已把 soldOut 翻成可买，强制点击即可走验证码流程。
     const beforeState = getButtonState(button);
-    if (beforeState.disabled) diag(`按钮存在但禁用 text="${beforeState.text}"，已强制点击`);
+    if (beforeState.disabled) {
+      if (/抢购人数过多|请刷新|系统繁忙|稍后/.test(beforeState.text)) {
+        diag(`系统繁忙(batch-preview 555)，刷新整页抢 200 窗口 text="${beforeState.text}"`);
+        reloadForFreshPreview();   // 节流窗口内则不刷新
+        scheduleNextTick();        // 没刷新就继续轮询，等节流到点再刷
+        return;
+      }
+      diag(`按钮存在但禁用 text="${beforeState.text}"，强制点击`);
+    }
 
     // 触发点击购买按钮
     const clicked = await triggerBuyButton(button);
@@ -1125,6 +1214,8 @@
     lastHealthOk = null;
     setServiceWarning(false);
     isWatching = false;
+    // 手动/到点停止后清掉续监听标记，避免刷新后又自动续上
+    try { localStorage.removeItem(WATCH_RESUME_KEY); } catch (e) {}
     if (logMessage) log(logMessage);
     updateStatus(statusText);
     refreshControls();
@@ -1132,6 +1223,20 @@
   }
 
   function getDialogRetryDelay() { return DIALOG_RETRY_BASE_DELAY_MS + Math.floor(Math.random() * DIALOG_RETRY_RANDOM_MS); }
+
+  // 刷新后自动续上监听：reloadForFreshPreview 会落一个新鲜标记，页面重新加载后
+  // 若标记仍新鲜且仍在目标时间窗口内，就自动重新开始监听，保持无人值守的自动化。
+  function maybeAutoResume() {
+    let at = 0;
+    try { at = Number(localStorage.getItem(WATCH_RESUME_KEY)) || 0; } catch (e) {}
+    if (!at) return;
+    // 标记超过 3 分钟视为过期（防止很久以后再开页面被误自动启动）
+    if (Date.now() - at > 3 * 60 * 1000) { try { localStorage.removeItem(WATCH_RESUME_KEY); } catch (e) {} return; }
+    refreshTargetTimestamp();
+    if (isTargetWindowExpired()) { try { localStorage.removeItem(WATCH_RESUME_KEY); } catch (e) {} return; }
+    log('检测到刷新前正在监听，自动继续…');
+    startWatching();
+  }
 
   function startWatching() {
     if (isWatching) return;
@@ -1144,6 +1249,7 @@
     isWaitingCaptcha = false;
     lastCycleSwitchAt = 0;
     retryCount = 0;
+    try { localStorage.setItem(WATCH_RESUME_KEY, String(Date.now())); } catch (e) {}
 
     const ts = `${config.targetHour}:${String(config.targetMinute).padStart(2, '0')}:${String(config.targetSecond || 0).padStart(2, '0')}`;
     log(`开始监听，目标时间: ${ts}`);
@@ -1242,7 +1348,7 @@
         <div class="glm-head-left">
           <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
           <span class="glm-title">GLM Coding Plan 抢购助手</span>
-          <span class="glm-badge">v1.7</span>
+          <span class="glm-badge">v1.7.1</span>
         </div>
         <div class="glm-head-btns">
           <button class="glm-iconbtn" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
@@ -1354,7 +1460,8 @@
     buildPanel();
     if (!countdownTimer) countdownTimer = setInterval(renderCountdown, 500);
     updateStatus('准备就绪');
-    log('脚本已加载 v1.7');
+    log('脚本已加载 v1.7.1（限流自动重试）');
+    maybeAutoResume();
   }
 
   if (document.readyState === 'loading') {
