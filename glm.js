@@ -722,7 +722,10 @@
 
   function getIdleStatusText() {
     if (!isWatching) return '就绪';
-    return Date.now() < targetTimestamp ? '监听中 · 等待到点' : '已到点 · 重试抢购中';
+    const now = Date.now();
+    if (now >= targetTimestamp) return '已到点 · 重试抢购中';
+    if (now >= targetTimestamp - START_LEAD_MS) return '提前抢购中 · 临近开售';
+    return '监听中 · 等待到点';
   }
 
   function getRateLimitRedirectTarget() {
@@ -751,6 +754,7 @@
 
   const STORAGE_KEY = 'glm-simple-config-v16';
   const WATCH_GRACE_MS = 60 * 60 * 1000;
+  const START_LEAD_MS = 2 * 60 * 1000;  // 比目标时刻提前 2 分钟开火（开售前已是 555，提前热身、接住开售第一秒）
   const CYCLE_SETTLE_MS = 350;
   const BUSY_RELOAD_THROTTLE_MS = 1500;          // 系统繁忙时两次刷新的最小间隔（越小越激进）
   const WATCH_RESUME_KEY = 'glm-watch-resume-v16'; // 刷新后自动续监听的标记
@@ -1115,8 +1119,8 @@
     }
 
     // ---------- 2. 处理弹窗检测 ----------
-    // 到点后才处理弹窗，避免误杀正常弹窗
-    if (Date.now() >= targetTimestamp - 1000) {
+    // 到「目标时刻 - 提前量」后才处理弹窗，避免误杀正常弹窗
+    if (Date.now() >= targetTimestamp - START_LEAD_MS) {
       const dialogState = detectDialogState();
 
       if (dialogState) {
@@ -1158,8 +1162,8 @@
     if (!cycleReady) { scheduleNextTick(); return; }
     if (Date.now() - lastCycleSwitchAt < CYCLE_SETTLE_MS) { scheduleNextTick(); return; }
 
-    // 如果还没到设定的抢购绝对时间，则继续等待
-    if (Date.now() < targetTimestamp) { scheduleNextTick(); return; }
+    // 还没到「目标时刻 - 提前量」则继续等待；到了就提前开火（开售前已是 555，先热身刷）
+    if (Date.now() < targetTimestamp - START_LEAD_MS) { scheduleNextTick(); return; }
 
     // 服务未连接：先不点购买（避免弹出无法识别的验证码、空耗重试次数），等服务就绪
     if (lastHealthOk === false) {

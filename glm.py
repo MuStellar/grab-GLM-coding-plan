@@ -31,6 +31,9 @@ CYCLE_LABELS = {"month": "连续包月", "quarter": "连续包季", "year": "连
 # 目标时刻后这么久内打开 → 仍抢「当天」；超过则滚到「明天」。与油猴版 WATCH_GRACE_MS 一致。
 GRACE_MINUTES = 60
 
+# 比目标时刻提前这么多秒开火（开售前已是 555，提前热身、接住开售第一秒）。与油猴版 START_LEAD_MS 一致。
+START_LEAD_SECONDS = 120
+
 
 def resolve_target_dt(now=None):
     """返回本次要抢的绝对时间点。今天的目标时刻若已过去超过 GRACE_MINUTES（默认 60min），
@@ -550,21 +553,21 @@ def main():
 
         try:
             while not completed and retry_count < max_retry and datetime.now() < deadline:
-                # 距目标时刻还有多少秒（负数=已到点）
-                diff = (target_dt - datetime.now()).total_seconds()
+                # 距「开抢时刻」(目标时刻提前 START_LEAD_SECONDS) 还有多少秒（负数=已开抢）
+                diff = (target_dt - datetime.now()).total_seconds() - START_LEAD_SECONDS
                 if diff > 60:
                     h, rem = divmod(int(diff), 3600)
                     m, s = divmod(rem, 60)
                     label = f"{h}时{m}分{s}秒" if h else f"{m}分{s}秒"
-                    print(f"\r倒计时: {label}    ", end='', flush=True)
+                    print(f"\r距开抢: {label}    ", end='', flush=True)
                     time.sleep(1)
                     continue
                 if diff > 0:
-                    print(f"\r倒计时: {diff:.1f}秒   ", end='', flush=True)
+                    print(f"\r距开抢: {diff:.1f}秒   ", end='', flush=True)
                     time.sleep(0.1)
                     continue
 
-                print(f"\n已到目标时间，开始抢购...")
+                print(f"\n已到开抢时刻（比目标提前 {START_LEAD_SECONDS // 60} 分钟），开始抢购...")
 
                 # 处理弹窗
                 dialog = detect_dialog(page)
