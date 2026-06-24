@@ -34,9 +34,14 @@ GRACE_MINUTES = 60
 # 比目标时刻提前这么多秒开火（开售前已是 555，提前热身、接住开售第一秒）。与油猴版 START_LEAD_MS 一致。
 START_LEAD_SECONDS = 120
 
-# 命中 555 系统繁忙（按钮灰显「抢购人数过多，请刷新再试」）时整页刷新重拉的最小间隔秒数，
-# 避免疯狂刷。与油猴版 BUSY_RELOAD_THROTTLE_MS 一致。
+# 命中 555 系统繁忙（按钮灰显「抢购人数过多」或 data:null 连卡都不渲染）时整页刷新重拉的
+# 间隔基准秒数。与油猴版 BUSY_RELOAD_THROTTLE_MS 一致。
 BUSY_RELOAD_THROTTLE_SECONDS = 1.5
+# 连续繁忙时按指数退避拉长刷新间隔(1.5→3→6→10s)，上限这么多秒。降低被服务器“按客户端单独
+# 限流”的概率——猛刷反而会把自己钉死在 data:null（同日他人正常、自己空即此情形）。
+BUSY_RELOAD_BACKOFF_MAX_SECONDS = 10
+# 连续繁忙到这么多次 → 提示疑似被单独限流，别再手动狂刷。
+BUSY_THROTTLED_HINT_AT = 4
 
 
 def resolve_target_dt(now=None):
@@ -560,7 +565,8 @@ def main():
         print(f"目标时间: {day_label} {target_dt:%Y-%m-%d %H:%M:%S}（超过目标时刻 {GRACE_MINUTES} 分钟才打开则抢明天）")
 
         retry_count = 0
-        last_reload_at = 0.0  # 上次因 555 繁忙整页重拉的时刻，用于节流
+        last_reload_at = 0.0  # 上次因 555 繁忙整页重拉的时刻，用于退避节流
+        busy_streak = 0       # 连续繁忙刷新次数，用于指数退避；拿到真实售卖态即清零
         # 真正的"放弃"由 GRACE_MINUTES 时间窗口（deadline）决定，和油猴版 WATCH_GRACE_MS 对齐。
         # max_retry 只作兜底防紧致死循环，要足够大，别在该窗口内先于时间窗口触发
         # （旧值 300，到点后几分钟就用光，导致没撑到窗口结束就停了）。
@@ -620,22 +626,39 @@ def main():
                     time.sleep(1)
                     continue
 
-                # 555 系统繁忙：按钮灰显「抢购人数过多，请刷新再试」。页面只在加载时拉一次
-                # batch-preview，繁忙态不刷新就永远是旧的 555，强点死按钮没用——必须整页重拉去搏
-                # 一个新结果（和油猴版 reloadForFreshPreview 一致）。只在繁忙态刷，按钮可买时不刷，
-                # 免得把好的 200 也刷没；带节流，避免疯狂刷。
+                # 555 系统繁忙：页面只在加载时拉一次 batch-preview，繁忙态不刷新就永远是旧的，
+                # 强点死按钮没用——必须整页重拉去搏一个新结果（和油猴版 reloadForFreshPreview 一致）。
+                # 两种繁忙形态都只刷不点：
+                #   1) 按钮灰显「抢购人数过多/系统繁忙/请刷新/稍后」（data 有卡但售罄态）；
+                #   2) data:null 连套餐卡都不渲染（find_plan_card 找不到卡）。
+                # 按钮可买时不刷，免得把好的 200 也刷没；带节流，避免疯狂刷。
                 card = find_plan_card(page, plan)
                 busy_text = buy_button_busy_text(card) if card else None
-                if busy_text and time.time() - last_reload_at >= BUSY_RELOAD_THROTTLE_SECONDS:
-                    retry_count += 1
-                    last_reload_at = time.time()
-                    print(f"[{retry_count}] 系统繁忙（\"{busy_text}\"），整页刷新重拉...")
-                    try:
-                        page.reload(wait_until='domcontentloaded', timeout=60000)
-                    except Exception as e:
-                        print(f"[诊断] 刷新异常（稍后重试）: {e}")
+                if card is None or busy_text:
+                    # 指数退避：连续繁忙就拉长两次刷新的间隔，避免把自己刷成单独限流。
+                    backoff = min(BUSY_RELOAD_THROTTLE_SECONDS * (2 ** busy_streak),
+                                  BUSY_RELOAD_BACKOFF_MAX_SECONDS)
+                    if time.time() - last_reload_at >= backoff:
+                        retry_count += 1
+                        busy_streak += 1
+                        last_reload_at = time.time()
+                        reason = busy_text or "套餐卡缺失(data:null)"
+                        if busy_streak >= BUSY_THROTTLED_HINT_AT:
+                            wait_s = min(BUSY_RELOAD_THROTTLE_SECONDS * (2 ** busy_streak),
+                                         BUSY_RELOAD_BACKOFF_MAX_SECONDS)
+                            print(f"[{retry_count}] 连续繁忙 {busy_streak} 次，疑似被单独限流，"
+                                  f"退避中(约{wait_s:.0f}s/次)，请勿手动狂刷：{reason}")
+                        else:
+                            print(f"[{retry_count}] 系统繁忙（{reason}），整页刷新重拉...")
+                        try:
+                            page.reload(wait_until='domcontentloaded', timeout=60000)
+                        except Exception as e:
+                            print(f"[诊断] 刷新异常（稍后重试）: {e}")
                     time.sleep(0.3)
                     continue
+
+                # 走到这说明卡片已渲染、按钮可处理（拿到真实售卖态）→ 清零退避计数。
+                busy_streak = 0
 
                 # 点击购买
                 if click_buy(page, plan, cycle):

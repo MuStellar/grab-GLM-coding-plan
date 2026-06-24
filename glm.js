@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7.2
+// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7.3
 // @namespace    http://tampermonkey.net/
-// @version      1.7.2
+// @version      1.7.3
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
 // @author       Codex
 // @match        *://bigmodel.cn/glm-coding*
@@ -72,8 +72,8 @@
   // batch-preview 限流自动重试参数：服务器忙时回 {code:555,success:false,data:null}，
   // 页面据此把按钮渲染成“抢购人数过多，请刷新再试”。我们替页面把同一请求快速重试，
   // 拿到 success 的响应再回给页面，抓住服务器恢复/放量的瞬间。
-  const BATCH_PREVIEW_BUSY_RETRY = 6;        // 单次请求最多额外重试几次
-  const BATCH_PREVIEW_RETRY_DELAY_MS = 180;  // 每次重试间隔
+  const BATCH_PREVIEW_BUSY_RETRY = 3;        // 单次加载最多额外重试几次（调小：每次 reload 的请求爆发砍半，避免把自己刷成限流）
+  const BATCH_PREVIEW_RETRY_DELAY_MS = 400;  // 每次重试间隔（拉长，进一步降低瞬时请求频率）
   function looksBusyBody(t) {
     return /"success"\s*:\s*false/.test(t) || /"code"\s*:\s*5\d\d/.test(t) ||
            /系统繁忙|人数过多|请稍后|请刷新/.test(t);
@@ -756,9 +756,13 @@
   const WATCH_GRACE_MS = 60 * 60 * 1000;
   const START_LEAD_MS = 2 * 60 * 1000;  // 比目标时刻提前 2 分钟开火（开售前已是 555，提前热身、接住开售第一秒）
   const CYCLE_SETTLE_MS = 350;
-  const BUSY_RELOAD_THROTTLE_MS = 1500;          // 系统繁忙时两次刷新的最小间隔（越小越激进）
+  const BUSY_RELOAD_THROTTLE_MS = 1500;          // 系统繁忙首次刷新的最小间隔（退避基准）
+  const BUSY_RELOAD_BACKOFF_MAX_MS = 10000;      // 连续繁忙时刷新间隔的退避上限（10s 封顶）
+  const BUSY_THROTTLED_HINT_AT = 4;              // 连续繁忙到这么多次 → 疑似被单独限流，提示别手动狂刷
   const WATCH_RESUME_KEY = 'glm-watch-resume-v16'; // 刷新后自动续监听的标记
   const LAST_RELOAD_KEY = 'glm-last-reload-v16';   // 上次刷新时间戳（跨刷新节流）
+  const BUSY_STREAK_KEY = 'glm-busy-streak-v16';   // 连续繁忙刷新次数（跨刷新，用于指数退避）
+  const BUSY_STREAK_STALE_MS = 60000;            // 距上次刷新超过这么久 → 不算“连续”，退避计数作废重来
   const SECOND_CLICK_DELAY_MS = 120;
   const DIALOG_RETRY_BASE_DELAY_MS = 350; // 已缩短，加速重试
   const DIALOG_RETRY_RANDOM_MS = 300;     // 已缩短
@@ -913,18 +917,42 @@
     return false;
   }
 
+  function getBusyStreak() {
+    try { return Number(localStorage.getItem(BUSY_STREAK_KEY)) || 0; } catch (e) { return 0; }
+  }
+  // 拿到真实售卖态（卡片渲染出来了）就清零退避，下次繁忙重新从 1.5s 起步。
+  function resetBusyStreak() {
+    try { localStorage.removeItem(BUSY_STREAK_KEY); } catch (e) {}
+  }
+  // 连续第 n 次繁忙刷新该等多久：1.5s 起，每次翻倍，封顶 10s。退避是为降低被服务器“按客户端
+  // 单独限流”的概率——猛刷反而会把自己钉死在 data:null（同日他人正常，自己空就是这情形）。
+  function busyBackoffMs(streak) {
+    return Math.min(BUSY_RELOAD_THROTTLE_MS * Math.pow(2, streak), BUSY_RELOAD_BACKOFF_MAX_MS);
+  }
+
   // batch-preview 返回 555 系统繁忙时 data 为 null，无字段可改写，页面也不会自己重拉，
-  // 只能刷新整页拿一份新的售卖态（实战脚本 mumumi v9.3 同思路）。带节流防刷新风暴，
+  // 只能刷新整页拿一份新的售卖态（实战脚本 mumumi v9.3 同思路）。指数退避防刷新风暴/自限流，
   // 并落一个续监听标记，刷新后自动续上（见 maybeAutoResume）。
   function reloadForFreshPreview() {
     let last = 0;
     try { last = Number(localStorage.getItem(LAST_RELOAD_KEY)) || 0; } catch (e) {}
-    if (Date.now() - last < BUSY_RELOAD_THROTTLE_MS) return;
+    // 距上次刷新太久说明不是“连续繁忙”（如手动重开/隔天），退避计数作废，从 1.5s 重新起步。
+    let streak = getBusyStreak();
+    if (last && Date.now() - last > BUSY_STREAK_STALE_MS) { streak = 0; resetBusyStreak(); }
+    if (Date.now() - last < busyBackoffMs(streak)) return;  // 退避窗口内不刷
+    const next = streak + 1;
     try {
       localStorage.setItem(LAST_RELOAD_KEY, String(Date.now()));
       localStorage.setItem(WATCH_RESUME_KEY, String(Date.now()));
+      localStorage.setItem(BUSY_STREAK_KEY, String(next));
     } catch (e) {}
-    log('系统繁忙(batch-preview 555)，刷新页面重拉售卖态…');
+    if (next >= BUSY_THROTTLED_HINT_AT) {
+      const waitS = Math.round(busyBackoffMs(next) / 1000);
+      log(`连续繁忙 ${next} 次，疑似被单独限流，正在退避（约 ${waitS}s/次）。请勿手动狂刷 F5，越刷越久`);
+      updateStatus(`疑似被限流 · 退避重试中(${waitS}s)`);
+    } else {
+      log('系统繁忙(batch-preview 555)，刷新页面重拉售卖态…');
+    }
     location.reload();
   }
 
@@ -1176,8 +1204,17 @@
     const button = findBuyButton(card);
 
     if (!button) {
-       // 模式 A：售罄时页面可能把按钮渲染成非 <button> 元素，findBuyButton 找不到 → 一直不点。
-       diag(`未找到购买按钮（卡片${card ? '存在' : '缺失'}，售罄可能渲染成非按钮元素）`);
+       // 卡片整个缺失：batch-preview 回 data:null（555 最严重形态），前端没 productList 就
+       // 一张卡都不渲染，连灰按钮都没有。页面不会自己重拉，干等没用——和繁忙态一样刷新整页
+       // 摇新结果，否则会永远卡在“等按钮渲染”这一步（网友实测的“购买面板消失后不动了”）。
+       if (!card) {
+         diag('套餐卡缺失(batch-preview data:null)，刷新整页抢 200 窗口');
+         reloadForFreshPreview();   // 节流窗口内则不刷新
+         scheduleNextTick();
+         return;
+       }
+       // 模式 A：卡片在、按钮被渲染成非 <button> 元素（真售罄那种），findBuyButton 找不到 → 等渲染。
+       diag('未找到购买按钮（卡片存在，售罄可能渲染成非按钮元素）');
        updateStatus('已到点，等待按钮渲染');
        scheduleNextTick();
        return;
@@ -1198,6 +1235,9 @@
       }
       diag(`按钮存在但禁用 text="${beforeState.text}"，强制点击`);
     }
+
+    // 走到这里说明卡片已渲染、按钮可点（拿到真实售卖态，不是繁忙/data:null）→ 清零退避计数。
+    resetBusyStreak();
 
     // 触发点击购买按钮
     const clicked = await triggerBuyButton(button);
@@ -1352,7 +1392,7 @@
         <div class="glm-head-left">
           <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
           <span class="glm-title">GLM Coding Plan 抢购助手</span>
-          <span class="glm-badge">v1.7.2</span>
+          <span class="glm-badge">v1.7.3</span>
         </div>
         <div class="glm-head-btns">
           <button class="glm-iconbtn" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
@@ -1464,7 +1504,7 @@
     buildPanel();
     if (!countdownTimer) countdownTimer = setInterval(renderCountdown, 500);
     updateStatus('准备就绪');
-    log('脚本已加载 v1.7.2（限流自动重试）');
+    log('脚本已加载 v1.7.3（限流自动重试）');
     maybeAutoResume();
   }
 
