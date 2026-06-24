@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7.1
+// @name         GLM Coding Plan 全自动抢购助手 (增强版) v1.7.2
 // @namespace    http://tampermonkey.net/
-// @version      1.7.1
+// @version      1.7.2
 // @description  准点自动点击指定套餐，绕过限流，支持验证码等待与异常弹窗检测自动重试。
 // @author       Codex
 // @match        *://bigmodel.cn/glm-coding*
@@ -1352,7 +1352,7 @@
         <div class="glm-head-left">
           <span class="glm-dot" id="glm-simple-dot-v16" data-state="idle"></span>
           <span class="glm-title">GLM Coding Plan 抢购助手</span>
-          <span class="glm-badge">v1.7.1</span>
+          <span class="glm-badge">v1.7.2</span>
         </div>
         <div class="glm-head-btns">
           <button class="glm-iconbtn" id="glm-simple-collapse-v16" type="button" title="收起 / 展开">–</button>
@@ -1464,7 +1464,7 @@
     buildPanel();
     if (!countdownTimer) countdownTimer = setInterval(renderCountdown, 500);
     updateStatus('准备就绪');
-    log('脚本已加载 v1.7.1（限流自动重试）');
+    log('脚本已加载 v1.7.2（限流自动重试）');
     maybeAutoResume();
   }
 
