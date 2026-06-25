@@ -248,6 +248,16 @@ def handle_tencent_captcha(page, _refresh_left=4):
         if not info or not info.get("imgUrl"):
             print("未找到验证码背景图")
             return False
+
+        # 图和上次提交过的完全一样 = 上次答案被拒、服务端还没换题。再在旧图上识别只会复现
+        # 同一组(可能错序的)坐标、再撞一次必败提交，白等服务端三次失败后才换图。主动点
+        # “换一张”逼出新题，省掉重复下载+重复 OCR+必败提交。换不动或重试用尽才退回旧行为。
+        if _last_captcha_img_url and info["imgUrl"] == _last_captcha_img_url:
+            if _refresh_left > 0 and _refresh_captcha(page):
+                print(f"同一张验证码未通过，换一张重试（剩 {_refresh_left - 1} 次）")
+                time.sleep(0.8)
+                return handle_tencent_captcha(page, _refresh_left - 1)
+
         _last_captcha_img_url = info["imgUrl"]   # 记录本次实际处理的图
 
         click_text = info.get("clickText")
