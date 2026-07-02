@@ -482,27 +482,70 @@ PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".chrome-
 
 
 def is_login_open(page):
-    """登录弹窗（手机号+验证码那个框）是否正显示。未登录访问 glm-coding 时网站会自动弹它。"""
+    """登录弹窗或“登录 / 注册”按钮可见时，说明当前未登录。"""
     try:
-        return page.evaluate('''() => {
+        state = page.evaluate("""() => {
+            const isVisible = (el) => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width <= 5 || r.height <= 5) return false;
+                const s = getComputedStyle(el);
+                return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+            };
             const dlg = document.querySelector('.login-content, .login-new-form, .login-form');
-            if (!dlg) return false;
-            const r = dlg.getBoundingClientRect();
-            return r.width > 5 && r.height > 5;
-        }''')
+            const loginBtn = [...document.querySelectorAll('button.register-btn, button[name], button')]
+                .find((el) => {
+                    const text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    const name = (el.getAttribute('name') || '').trim();
+                    return isVisible(el) && (text.includes('登录 / 注册') || name === '登录 / 注册');
+                });
+            return {
+                dialog: isVisible(dlg),
+                loginButton: Boolean(loginBtn),
+            };
+        }""")
+
+        print(state, "login_state")
+        return bool(state.get("dialog") or state.get("loginButton"))
+    except Exception:
+        return False
+
+
+def click_login_button_if_present(page):
+    """如果页面上有“登录 / 注册”按钮，自动点击打开登录弹窗。"""
+    try:
+        return page.evaluate("""() => {
+            const isVisible = (el) => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width <= 5 || r.height <= 5) return false;
+                const s = getComputedStyle(el);
+                return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+            };
+            const loginBtn = [...document.querySelectorAll('button.register-btn, button[name], button')]
+                .find((el) => {
+                    const text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    const name = (el.getAttribute('name') || '').trim();
+                    return isVisible(el) && (text.includes('登录 / 注册') || name === '登录 / 注册');
+                });
+            if (!loginBtn) return false;
+            loginBtn.click();
+            return true;
+        }""")
     except Exception:
         return False
 
 
 def wait_until_logged_in(page, appear_grace=2.0):
-    """自动等待登录完成：不需要回终端按键。
-    - 已登录：登录框不会出现，直接放行；
-    - 未登录：网站自动弹登录框，你在浏览器里输手机号+验证码登录，框消失即自动继续。"""
-    time.sleep(appear_grace)  # 给登录弹窗一点出现时间
+    """自动等待登录完成；未登录时会先自动点击“登录 / 注册”按钮。"""
+    time.sleep(appear_grace)
     if not is_login_open(page):
         print("已是登录状态，无需登录。")
         return
-    print("检测到登录弹窗：请在浏览器里输入手机号+验证码登录（无需回到终端按键，登录后自动继续）...")
+    if click_login_button_if_present(page):
+        print("检测到登录 / 注册按钮，已自动点击打开登录弹窗。")
+        time.sleep(1)
+    print("检测到登录入口：请在浏览器里完成手机号+验证码登录，登录后会自动继续。")
     while is_login_open(page):
         time.sleep(1)
     print("登录完成，继续。")
